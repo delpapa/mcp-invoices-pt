@@ -1,0 +1,79 @@
+# mcp-invoicesPT: your private settings.
+# Copy this file to ~/.config/mcp-invoicesPT/config.yaml (or point the INVOICES_PT_CONFIG variable at it).
+# Everything personal lives here, never in the repository. Lines starting with # are comments.
+# Tip: put text values in "quotes". Only the NIF is required; everything else has a sensible default.
+
+taxpayer:
+  nif: "000000000"              # your NIF: checks invoices are addressed to you and recibos are issued by you
+
+# Where your books live: "xlsx" (a local Excel workbook, one per tax year; the default) or "google" (a Google Sheet)
+backend: xlsx
+
+paths:                          # {year} is filled in per tax year; ~ means your home folder
+  # Where new invoices, receipts and e-Fatura exports arrive. Your Downloads folder works; a dedicated folder
+  # (e.g. ~/Downloads/invoices) is better: only what is in it gets looked at, and nothing else gets read.
+  inbox: ~/Downloads
+  year_root: ~/Taxes/{year}     # one folder per tax year; put your submitted IVA return PDFs here too
+  expenses_dir: "{year_root}/Expenses"
+  income_dir: "{year_root}/Income"
+  workbook: "{year_root}/Bookkeeping_{year}.xlsx"   # the books (backend: xlsx)
+  # cache: ~/.cache/mcp-invoicesPT                          # exchange rates
+  # ledger: ~/.local/share/mcp-invoicesPT/ledger.sqlite    # which files were already handled
+
+# Sheet names inside the workbook (optional)
+# xlsx:
+#   expenses_sheet: Expenses
+#   income_sheet: Income
+
+# Only for backend: google (install with: pip install "mcp-invoices-pt[google]")
+# google:
+#   service_account: ~/.config/mcp-invoicesPT/service-account.json
+#   spreadsheet_id: ""          # from the sheet's URL; share the sheet with the service account as Editor
+#   expenses_tab: "Expenses_{year}"
+#   income_tab: "Income_{year}"
+
+# If you rename columns in your books, map the tools' fields to your headers (both backends):
+# columns: {supplier_vat: "Supplier VAT"}        # expenses table
+# income_columns: {fx: "FX rate"}               # income table
+
+# Optional: a folder with your own parsers (e.g. for your personal invoice template); see examples/parsers
+# parsers_dir: ~/.config/mcp-invoicesPT/parsers
+
+# Your cards: the last 4 digits printed on receipts -> the account name you use in the books.
+# Always quote the digits ("0123", not 0123).
+cards: {}
+#   "1234": my-bank
+#   "5678": my-other-bank
+
+# Per-supplier rules (optional). `match` is a case-insensitive pattern tried on the supplier's name and VAT
+# number. Portuguese invoices' QR codes carry only the NIF, so match Portuguese suppliers by NIF.
+# Any of: name (supplier name to book), slug (start of the file name), account, code (VAT code),
+#         business_pct (0.3 = 30% business use), document (label in the Document column)
+suppliers: []
+#   - match: "amazon"
+#     account: my-bank
+#   - match: "Wise Europe"
+#     code: NONE                # payment services are VAT-exempt, nothing to self-charge
+#   - match: "500000000"        # a Portuguese supplier, by NIF
+#     name: "My Accountant, Lda"
+#     slug: accountant
+#   - match: "500000001"
+#     name: "My Landlord"
+#     code: NoVAT
+#     business_pct: 0.3         # share of the home used for work
+
+# Per-client rules for sales (optional). `match` is a pattern on the client name on your invoice or the tax id
+# on the AT document. Without a rule the client name comes from your invoice.
+clients: []
+#   - match: "Example Client"
+#     name: EXC
+#     tax_id: "12-3456789"
+#     country: US
+#     vat_case: "NON-EU / C8"   # PT / C3, EU / C7 or NON-EU / C8
+#     account: my-bank
+
+# File names for both documents of a sale ({date} = invoice date; {invoice_no} = your invoice number, or the
+# AT document's number when there is no invoice of your own)
+# income_names:
+#   invoice: "{date:%Y%m%d}_invoice_{invoice_no}"
+#   recibo: "{date:%Y%m%d}_recibo_{invoice_no}"

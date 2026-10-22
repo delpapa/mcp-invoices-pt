@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-invoices-pt"
+version = "0.7.0"
+description = "MCP server for a Portuguese freelancer's invoices: reads, files and books them into a spreadsheet (Excel or Google Sheets) for IVA and IRS"
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.3",
+    "zxing-cpp>=3.1",
+    "pillow>=10",
+    "pyyaml>=6",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+google = ["gspread>=6", "google-auth>=2"]   # only for `backend: google`
+dev = ["pytest>=8"]
+
+[project.scripts]
+mcp-invoices-pt = "invoices_pt.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
