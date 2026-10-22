@@ -492,5 +492,8 @@ INVOICES_PT_PRIVATE=1 INVOICES_PT_YEAR=2026 .venv/bin/pytest tests/test_private_
 
 ## License
 
+This is a tool I have been writing for myself first. I keep the generic part here, separate from any personal
+settings, so others can use it too.
+
 [MIT](LICENSE). You can use, change and share this freely, including commercially, as long as you keep the
-copyright notice. There is no warranty.
+copyright notice. There is no warranty. Issues and pull requests are welcome.
