@@ -16,8 +16,14 @@ and it:
 Technically it is an [MCP](https://modelcontextprotocol.io) server: a set of tools that an AI assistant such as
 Claude runs on your computer.
 
-> **Not tax advice.** This is a bookkeeping aid. Check the figures before you submit anything, and ask a
-> certified accountant (contabilista certificado) when in doubt.
+> [!WARNING]
+> **No guarantee, and not tax advice.** I do not guarantee that this software, or any figure it produces, is
+> correct, complete or up to date with Portuguese tax law. It can misread a document, pick the wrong VAT treatment
+> or put a value in the wrong box. Nothing here is tax, legal or accounting advice.
+>
+> You are responsible for what you submit to the Autoridade Tributária. Check every figure against your documents
+> before you file, and ask a certified accountant (contabilista certificado) when in doubt. I accept no liability
+> for any loss, penalty or interest that results from using it. See also the [License](#license).
 
 > **Updated regularly.** New invoice and receipt layouts are added as they come up. See
 > [Supported documents](#supported-documents) and the [CHANGELOG](CHANGELOG.md). If yours is not read yet, open an
@@ -496,4 +502,5 @@ This is a tool I have been writing for myself first. I keep the generic part her
 settings, so others can use it too.
 
 [MIT](LICENSE). You can use, change and share this freely, including commercially, as long as you keep the
-copyright notice. There is no warranty. Issues and pull requests are welcome.
+copyright notice. It comes **as is, with no warranty of any kind**: I do not guarantee that it is correct or fit
+for your situation, and it is not tax advice. Issues and pull requests are welcome.
