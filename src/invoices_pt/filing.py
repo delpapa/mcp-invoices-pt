@@ -12,7 +12,7 @@ import shutil
 from .config import Config
 from .documents import efatura
 from .extract import matching_documents, proposal, read_document
-from .ledger import Ledger, sha256
+from .ledger import Ledger, sha256, verified_filed_copy
 from .model import Document
 
 DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
@@ -50,11 +50,11 @@ def index_folder(folder: str, ledger: Ledger) -> dict:
 def _filed_copy(ledger: Ledger, digest: str, doc: Document | None) -> str | None:
     """Path of a filed file with the same content, or the same invoice, that still exists."""
     same = ledger.get(digest)
-    if same and same["status"] == "filed" and os.path.exists(same["path"]):
+    if verified_filed_copy(same):
         return same["path"]
     if doc is not None:
         for r in matching_documents(doc, ledger):
-            if r["status"] == "filed" and r["sha256"] != digest and os.path.exists(r["path"]):
+            if r["sha256"] != digest and verified_filed_copy(r):
                 return r["path"]
     return None
 

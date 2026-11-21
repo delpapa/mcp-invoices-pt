@@ -92,3 +92,16 @@ def test_credit_note_with_same_supplier_and_number(qr_png, cfg, tmp_path, legacy
     assert sha256(download) != sha256(filed)
     duplicate = file_document(cfg, ledger, download, dry_run=False)
     assert duplicate["existing"] == filed and duplicate["deleted"]
+
+
+def test_replaced_archive_file_does_not_make_inbox_download_a_duplicate(qr_png, cfg, tmp_path):
+    _, ledger = _setup(cfg)
+    folder = tmp_path / "inbox"
+    original = qr_png(folder=folder)
+    filed = file_document(cfg, ledger, original, dry_run=False)["to"]
+    with open(filed, "wb") as archive:
+        archive.write(b"unrelated file now occupies archived path")
+    download = qr_png(folder=folder)
+    assert not inbox.plan(cfg, ledger)["copies"]
+    result = file_document(cfg, ledger, download, dry_run=False)
+    assert os.path.isfile(download) and "already exists" in result["error"]

@@ -114,3 +114,15 @@ def test_year_setup_creates_folders_and_clear_missing_message(user):
     assert os.path.isdir(tmp / "Taxes/2026/Expenses") and os.path.isdir(tmp / "Taxes/2026/Income")
     assert "nothing set up for 2031" in server.missing(2031)["error"]
     assert set(server.missing(2026)) == {"expenses", "income"}
+
+
+def test_extracting_a_second_download_preserves_filed_copy(user):
+    server, tmp = user
+    original = tmp / "inbox" / "officeshop.png"
+    copy = tmp / "inbox" / "officeshop (1).png"
+    filed = server.file_document(str(original), dry_run=False)["to"]
+    server.extract(str(copy))
+    entry = next(item for item in server.scan_inbox() if item["path"] == str(copy))
+    assert entry["filed_as"] == filed
+    duplicate = server.file_document(str(copy), dry_run=False)
+    assert duplicate["deleted"] and os.path.isfile(filed)
