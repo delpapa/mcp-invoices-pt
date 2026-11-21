@@ -7,6 +7,7 @@ deletes the temporary tabs again. Opt-in:
 """
 
 import os
+from uuid import uuid4
 
 import pytest
 
@@ -51,11 +52,14 @@ def test_layout_end_to_end():
     real = Config.load()
     if real.backend != "google":
         pytest.skip("the configured backend is not a Google Sheet")
+    run_id = uuid4().hex[:12]
+    exp_name = f"ZZTEST_Expenses_2099_{run_id}"
+    inc_name = f"ZZTEST_Income_2099_{run_id}"
     cfg = Config({"backend": "google", "taxpayer": real.data.get("taxpayer", {}),
-                  "google": {**real.google, "expenses_tab": "ZZTEST_Expenses_{year}", "income_tab": "ZZTEST_Income_{year}"}})
+                  "google": {**real.google, "expenses_tab": exp_name, "income_tab": inc_name}})
     sh = open_spreadsheet(cfg)
     try:
-        layout.create_year(sh, 2099, "ZZTEST_Expenses_2099", "ZZTEST_Income_2099", opening_credit=100.0)
+        layout.create_year(sh, 2099, exp_name, inc_name, opening_credit=100.0)
         exp, inc = ExpenseSheet(cfg, 2099, sh), IncomeSheet(cfg, 2099, sh)
         for row in PURCHASES:
             assert exp.add(row, dry_run=False).get("written"), row
@@ -75,7 +79,7 @@ def test_layout_end_to_end():
         assert "locked" in exp.add(dict(date="2099-01-09", invoice_no="Z")).get("error", "")
         assert exp.declaration("Q1")["live_formulas"] is False
     finally:
-        for name in ("ZZTEST_Expenses_2099", "ZZTEST_Income_2099"):
+        for name in (exp_name, inc_name):
             try:
                 sh.del_worksheet(sh.worksheet(name))
             except Exception:
