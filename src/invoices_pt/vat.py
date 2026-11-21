@@ -43,6 +43,12 @@ def region(country: str) -> str:
     return "PT" if country == "PT" else "EU" if country in EU else "OutEU" if country else ""
 
 
+def credit_note_checks(doc: Document | None) -> list[str]:
+    if doc and doc.doc_type == "credit_note" and doc.vat_included and doc.country == "PT":
+        return ["review the VAT adjustment for this credit note before booking it"]
+    return []
+
+
 def suggest_code(doc: Document) -> str:
     """Best guess from the document alone; personal supplier rules in the config override it."""
     if doc.country == "PT" or doc.layer in ("qr", "efatura"):

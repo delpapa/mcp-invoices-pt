@@ -56,6 +56,15 @@ def test_portuguese_client_with_iva(qr_png, cfg):
     assert out["checks"] == []
 
 
+def test_issued_credit_note_reverses_income_and_withholding(qr_png, cfg):
+    payload = PT_SALE.replace("D:FR", "D:NC").replace("G:FR", "G:NC") + "*P:20.00"
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    row = result["row"]
+    assert (row["amount"], row["net_eur"], row["vat_eur"], row["withheld"]) == (-615.0, -500.0, -115.0, -20.0)
+    assert row["vat_case"] == ""
+    assert any("credit note" in check for check in result["checks"])
+
+
 def test_missing_income(tmp_path):
     (tmp_path / "inv1.pdf").write_bytes(b"x")
     (tmp_path / "stray.pdf").write_bytes(b"x")

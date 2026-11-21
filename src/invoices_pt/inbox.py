@@ -75,7 +75,7 @@ def pair_sales(invoices: list[Document], at_docs: list[Document]) -> list[tuple[
 
 
 def _checks(doc: Document, prop: dict, row: dict) -> list[str]:
-    out = []
+    out = list(prop["checks"])
     if not row["date"] or row["amount"] is None:
         out.append("no date or amount read: check the document")
     if isinstance(prop["fx_rate"], str):

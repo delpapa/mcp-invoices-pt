@@ -99,6 +99,26 @@ def test_extract_withholds_unrelated_text(user):
     assert "dinner" in server.extract(str(tmp / "inbox" / "letter.pdf"), read_anyway=True)["document"]["text"]
 
 
+def test_credit_note_agrees_across_qr_inbox_and_efatura(user, qr_png):
+    server, tmp = user
+    payload = ("A:500000003*B:999999990*C:PT*D:NC*F:20260414*G:NC 9/7*H:KKKK-7*"
+               "I1:PT*I7:100.00*I8:23.00*N:23.00*O:123.00")
+    path = qr_png(payload, folder=tmp / "inbox", name="credit.png")
+    csv = tmp / "inbox" / "e-fatura.csv"
+    csv.write_text(CSV.replace('"1.250,00 €";"0,00 €";"1.250,00 €"', '"123,00 €";"23,00 €";"100,00 €"'),
+                   encoding="utf-8")
+    qr_credit = server.extract(path)
+    csv_credit = server.read_efatura(str(csv))[1]
+    for result in (qr_credit, csv_credit):
+        doc = result["document"]
+        assert (doc["amount"], doc["vat_included"]) == (-123.0, -23.0)
+        assert result["proposal"]["vat_code"] == ""
+    planned = next(item for item in server.plan_inbox()["expenses"] if item["path"] == path)
+    assert planned["row"]["amount"] == -123.0
+    assert qr_credit["proposal"]["checks"] == csv_credit["proposal"]["checks"]
+    assert qr_credit["proposal"]["checks"][0] in planned["checks"]
+
+
 def test_sales_go_to_the_income_folder(user):
     server, tmp = user
     sale = server.plan_inbox()["sales"][0]

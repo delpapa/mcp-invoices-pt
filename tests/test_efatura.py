@@ -31,3 +31,10 @@ def test_other_csv_is_not_an_export(tmp_path):
     path = tmp_path / "other.csv"
     path.write_text("a;b\n1;2\n")
     assert not efatura.is_export(str(path))
+
+
+def test_signed_credit_note_stays_negative(tmp_path):
+    path = tmp_path / "credit.csv"
+    path.write_text(CSV.replace("1.250,00 €", "-1.250,00 €"), encoding="utf-8")
+    credit = efatura.parse_csv(str(path))[1]
+    assert (credit.amount, credit.extra["base"]) == (-1250.0, -1250.0)

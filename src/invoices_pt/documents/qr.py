@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import zxingcpp
 from PIL import Image
 
-from ..model import Document
+from ..model import Document, signed_amount
 
 # Field codes from the AT technical specification
 FIELDS = {
@@ -59,20 +59,22 @@ def read_qr(path: str, dpi: int = 250) -> dict | None:
 
 
 def to_document(fields: dict, file: str = "") -> Document:
+    kind = DOC_TYPES.get(fields.get("doc_type", ""), fields.get("doc_type", ""))
+
     def num(k: str) -> float:
         return float(fields.get(k) or 0)
 
     return Document(
         layer="qr",
         file=file,
-        doc_type=DOC_TYPES.get(fields.get("doc_type", ""), fields.get("doc_type", "")),
+        doc_type=kind,
         date=dt.datetime.strptime(fields["date"], "%Y%m%d").date(),
         supplier_vat="PT" + fields["supplier_nif"],
         country="PT",
         invoice_no=fields.get("doc_id", ""),
         atcud=fields.get("atcud", ""),
-        amount=num("total"),
-        vat_included=num("total_vat"),
+        amount=signed_amount(num("total"), kind),
+        vat_included=signed_amount(num("total_vat"), kind),
         buyer_nif=fields.get("buyer_nif", ""),
         markers=["exempt"] if num("total_vat") == 0 and num("base_exempt") > 0 else [],
         extra={k: fields[k] for k in KEEP if k in fields},

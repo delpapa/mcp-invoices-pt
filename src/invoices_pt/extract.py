@@ -70,9 +70,11 @@ def proposal(doc: Document, cfg: Config) -> dict:
         "PDF receipt" if doc.doc_type == "receipt" else "PDF invoice")
     ext = os.path.splitext(doc.file)[1].lower() or ".pdf"
     sale = doc.doc_type == "sales_invoice"
+    checks = vat.credit_note_checks(doc)
     return {
         "supplier": rule.get("name") or doc.supplier,     # QR codes carry only the NIF; the config can name it
-        "vat_code": "" if sale else rule.get("code") or vat.suggest_code(doc),
+        "vat_code": "" if sale or checks else rule.get("code") or vat.suggest_code(doc),
+        "checks": checks,
         "region": vat.region(doc.country),
         "fx_rate": fx_rate,
         "account": cfg.account(doc),

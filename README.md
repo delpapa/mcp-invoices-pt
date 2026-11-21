@@ -113,6 +113,8 @@ The usual cross-border cases are handled:
   recibo (RG/RC). That covers telecoms, utilities, landlords, shops and restaurants: anything issued by certified
   software.
 - PDFs, or a photo of the paper receipt.
+- Credit notes from QR codes and e-Fatura reduce the booked amount. For a Portuguese credit note with IVA,
+  the booking proposal leaves the VAT code or sales VAT case blank for review of the adjustment.
 - The recibos verdes, faturas and faturas-recibo **you** issue on the Portal das Finanças.
 - The **e-Fatura** CSV export, for invoices that only exist there.
 - Your **submitted Declaração Periódica** PDF, used to check and lock a quarter you have filed.

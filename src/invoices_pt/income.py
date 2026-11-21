@@ -6,7 +6,7 @@ import os
 
 from . import vat
 from .config import Config
-from .model import Document
+from .model import Document, signed_amount
 
 
 def _f(x) -> float:
@@ -41,7 +41,7 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
     total = _f(at_doc.amount) if at_doc else 0.0
     vat_eur = _f(at_doc.vat_included) if at_doc else 0.0
     net_eur = round(total - vat_eur, 2) if at_doc else None
-    withheld = _f(extra.get("withholding"))
+    withheld = signed_amount(_f(extra.get("withholding")), at_doc.doc_type) if at_doc else 0.0
     country = rule.get("country") or extra.get("buyer_country", "")
     amount = invoice.amount if invoice and invoice.amount is not None else total
     currency = (invoice.currency if invoice else "") or "EUR"
@@ -83,6 +83,9 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "recibo_file": names.get("recibo", ""),
         "account": rule.get("account", ""),
     }
+    if credit_checks := vat.credit_note_checks(at_doc):
+        row["vat_case"] = ""
+        checks.extend(credit_checks)
     if not row["client"]:
         checks.append("no client name: add a client rule in the config, or give the name")
     if at_doc and at_doc.buyer_nif and rule.get("tax_id") and rule["tax_id"] != at_doc.buyer_nif:

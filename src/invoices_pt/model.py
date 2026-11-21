@@ -15,6 +15,11 @@ MARKERS = {
 }
 
 
+def signed_amount(value: float, doc_type: str) -> float:
+    """Credit notes reverse amounts even when the source prints an unsigned value."""
+    return -abs(value) if doc_type == "credit_note" else value
+
+
 @dataclass
 class Document:
     layer: str                      # how it was read: "qr", "efatura", "parser:<name>" or "text"
