@@ -105,3 +105,16 @@ def test_formulas_agree_with_python(books, tmp_path):
     assert abs(ws.cell(layout.SUMS_ROW + 5, irs_col).value - mine_irs["2099"]) < 0.005
     totals = wb["Income"]
     assert abs(totals.cell(3, 3).value - 1500.0) < 0.005 and abs(totals.cell(4, 4).value - 1000.0) < 0.005
+
+def test_old_income_layout_refuses_unsupported_sales_before_writing(tmp_path):
+    cfg = Config({"paths": {"year_root": str(tmp_path / "{year}")}})
+    create_year(cfg, 2099, 0.0)
+    _, inc = open_books(cfg, 2099)
+    wb = inc.book.load()
+    ws = wb["Income"]
+    ws.delete_cols(ws.max_column - 3, 4)  # the last version ended at the Account column
+    inc.book.save(wb)
+
+    assert "upgrade" in inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C1"), dry_run=False)["error"]
+    assert inc.records() == []
+    assert inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C3"), dry_run=False)["written"]

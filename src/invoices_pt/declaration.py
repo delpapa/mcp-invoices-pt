@@ -9,7 +9,7 @@ from .documents.text import pdf_text
 
 # Boxes of quadro 06 / 06-A and the result fields
 KNOWN = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 40, 41,
-         61, 90, 91, 92, 93, 94, 95, 96, 97, 98, 106}
+         61, 65, 66, 67, 68, 90, 91, 92, 93, 94, 95, 96, 97, 98, 106}
 PAIR = re.compile(r"(?<![\d.,])(\d{1,3})\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})(?![\d,])")
 
 
@@ -19,14 +19,14 @@ def _pt_number(s: str) -> float:
 
 def parse_return_text(text: str) -> dict[int, float]:
     """Box -> value from the text of a submitted return. Box 61 (credit carried in) is printed apart from its
-    label, so it is derived from box 91 = 20 + 21 + 22 + 23 + 24 + 40 + 61."""
+    label, so it is derived from box 91 = 20 + 21 + 22 + 23 + 24 + 40 + 61 + 65 + 67."""
     boxes: dict[int, float] = {}
     for m in PAIR.finditer(text):
         box = int(m.group(1))
         if box in KNOWN and box not in boxes:
             boxes[box] = _pt_number(m.group(2))
     if 61 not in boxes and 91 in boxes:
-        boxes[61] = round(boxes[91] - sum(boxes.get(b, 0.0) for b in (20, 21, 22, 23, 24, 40)), 2)
+        boxes[61] = round(boxes[91] - sum(boxes.get(b, 0.0) for b in (20, 21, 22, 23, 24, 40, 65, 67)), 2)
     return boxes
 
 

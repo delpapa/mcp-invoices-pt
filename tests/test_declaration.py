@@ -27,6 +27,11 @@ def test_parse_return_text():
     assert b[61] == 100.00        # derived from box 91, since its value is printed apart from its label
 
 
+def test_derive_opening_credit_after_annex_amounts():
+    boxes = parse_return_text("20 5,00 24 10,00 40 3,00 65 21,00 67 13,00 91 152,00")
+    assert boxes[61] == 100.0
+
+
 def test_find_return_pdf(tmp_path):
     for name in ("IVA_2026_1TRI_000_1.pdf", "IVA_2026_Q1_substitution.pdf", "IVA_2026_2TRI_000_2.pdf", "IVA_2026_3TRI.pdf",
                  "notes.pdf"):

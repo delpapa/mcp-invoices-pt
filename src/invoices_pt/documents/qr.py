@@ -24,7 +24,7 @@ FIELDS = {
 DOC_TYPES = {"FT": "invoice", "FS": "simplified_invoice", "FR": "invoice_receipt", "NC": "credit_note",
              "ND": "debit_note", "RG": "receipt", "RC": "receipt"}
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
-KEEP = ("buyer_country", "not_subject", "withholding", "base_exempt", "base_reduced", "vat_reduced",
+KEEP = ("fiscal_space", "buyer_country", "not_subject", "withholding", "base_exempt", "base_reduced", "vat_reduced",
         "base_intermediate", "vat_intermediate", "base_normal", "vat_normal")
 
 

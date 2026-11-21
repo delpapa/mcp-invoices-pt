@@ -7,15 +7,15 @@ row per sale. VAT maths are sheet formulas, so the sheet stays readable and edit
 
 from __future__ import annotations
 
-from .vat import CODES, EU, SALES_CODES
+from .vat import CODES, EU, NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES, SALES_CODES
 
 EU_ARRAY = "{" + ",".join(f'"{c}"' for c in sorted(EU)) + "}"
 DOCUMENT_LABELS = ["PDF ✓ QR-verified", "PDF invoice", "PDF receipt", "e-Fatura only", "No invoice",
                    "MISSING file", "MISSING (no data yet)"]
 
-EXP_HEADER_ROW, EXP_FIRST_ROW = 30, 31
+EXP_HEADER_ROW, EXP_FIRST_ROW = 34, 35
 INC_HEADER_ROW, INC_FIRST_ROW = 7, 8
-BLOCK_TITLE_ROW, SUMS_ROW = 3, 23
+BLOCK_TITLE_ROW, SUMS_ROW = 3, 27
 QUARTER_COLS = {"Q1": "E", "Q2": "F", "Q3": "G", "Q4": "H"}
 
 
@@ -28,6 +28,15 @@ def _region(col: str) -> str:
     return f'=IF({col}{{r}}="","",IF({col}{{r}}="PT","PT",IF(ISNUMBER(MATCH({col}{{r}},{eu},0)),"EU","OutEU")))'
 
 
+BUSINESS_SHARE = 'IF(Q{r}="",1,Q{r})'
+REVERSE_CHARGE_COLUMNS = []
+for code, (base_box, vat_box) in REVERSE_CHARGE_BOXES.items():
+    REVERSE_CHARGE_COLUMNS.extend([
+        (f"Box {base_box}", f'=IF(TRIM(P{{r}})="{code}",N{{r}},0)', "num"),
+        (f"Box {vat_box}", f'=IF(TRIM(P{{r}})="{code}",ROUND(N{{r}}*{NORMAL_RATE},2),0)', "num"),
+    ])
+
+
 # (header, formula template with {r} for the row, or None for an input column, number format)
 EXPENSE_COLUMNS = [
     ("Date", None, "date"), ("Q", _q("A"), ""), ("Expense", None, ""), ("Supplier", None, ""),
@@ -36,19 +45,24 @@ EXPENSE_COLUMNS = [
     ("Amount €", '=IF(J{r}="","",ROUND(J{r}/IF(L{r}="",1,L{r}),2))', "num"),
     ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/IF(L{r}="",1,L{r}),2))', "num"),
     ("NIF?", None, ""), ("VAT code", None, ""), ("Business %", None, "pct"),
-    ("Box 3", '=IF(P{r}="NON-EU-RC",N{r},0)', "num"),
-    ("Box 4", '=IF(P{r}="NON-EU-RC",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 12", '=IF(P{r}="EU-RC-GOODS",N{r},0)', "num"),
-    ("Box 13", '=IF(P{r}="EU-RC-GOODS",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 16", '=IF(P{r}="EU-RC",N{r},0)', "num"),
-    ("Box 17", '=IF(P{r}="EU-RC",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 20", '=IF(P{r}="PT-ASSET",ROUND((M{r}-N{r})*Q{r},2),0)', "num"),
-    ("Box 24", '=IF(P{r}="PT",ROUND((M{r}-N{r})*Q{r},2),0)+ROUND((S{r}+U{r}+W{r})*Q{r},2)', "num"),
+    *REVERSE_CHARGE_COLUMNS,
+    ("Box 20", '=IF(TRIM(P{r})="PT-ASSET",ROUND((M{r}-N{r})*' + BUSINESS_SHARE + ',2),0)', "num"),
+    ("Box 24", '=IF(TRIM(P{r})="PT",ROUND((M{r}-N{r})*' + BUSINESS_SHARE + ',2),0)+ROUND((S{r}+U{r}+W{r})*' + BUSINESS_SHARE + ',2)', "num"),
     ("Box 98", "=R{r}", "num"),
     ("Net VAT benefit €", "=X{r}+Y{r}-S{r}-U{r}-W{r}", "num"),
-    ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*Q{r}-AA{r},2))', "num"),
+    ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*' + BUSINESS_SHARE + '-AA{r},2))', "num"),
     ("Document", None, ""), ("File", None, ""), ("Payment account", None, ""),
 ]
+
+
+def _sales_columns(case: str) -> list[tuple]:
+    base_box, tax_box = SALES_BOXES[case]
+    columns = [(f"Box {base_box}", f'=IF(TRIM(S{{r}})="{case}",N{{r}},0)', "num")]
+    if tax_box:
+        columns.append((f"Box {tax_box}", f'=IF(TRIM(S{{r}})="{case}",N(P{{r}}),0)', "num"))
+    return columns
+
+
 INCOME_COLUMNS = [
     ("Invoice date", None, "date"), ("Q (IVA)", _q("A"), ""), ("Client", None, ""), ("Country", None, ""),
     ("Region", _region("D"), ""), ("Client tax ID", None, ""), ("Your invoice no.", None, ""),
@@ -56,9 +70,9 @@ INCOME_COLUMNS = [
     ("Amount (orig.)", None, "num"), ("FX (per €)", None, "fx"), ("Net € (AT recibo)", None, "num"),
     ("IVA %", None, ""), ("IVA €", None, "num"), ("IRS withheld €", None, "num"),
     ("Total received €", '=IF(N{r}="","",N{r}+N(P{r})-N(Q{r}))', "num"), ("VAT case", None, ""),
-    ("Box 3", '=IF(S{r}="PT / C3",N{r},0)', "num"), ("Box 4", '=IF(S{r}="PT / C3",N(P{r}),0)', "num"),
-    ("Box 7", '=IF(S{r}="EU / C7",N{r},0)', "num"), ("Box 8", '=IF(S{r}="NON-EU / C8",N{r},0)', "num"),
+    *_sales_columns("PT / C3"), *_sales_columns("EU / C7"), *_sales_columns("NON-EU / C8"),
     ("Invoice file", None, ""), ("Recibo file", None, ""), ("Account", None, ""),
+    *_sales_columns("PT / C1"), *_sales_columns("PT / C5"),
 ]
 FORMATS = {"date": {"type": "DATE", "pattern": "dd.mm.yyyy"}, "num": {"type": "NUMBER", "pattern": "#,##0.00"},
            "fx": {"type": "NUMBER", "pattern": "0.0000"}, "pct": {"type": "PERCENT", "pattern": "0%"}}
@@ -77,6 +91,14 @@ def row_formulas(kind: str, r: int) -> dict[str, str]:
     """Header -> formula for row `r` of a table in the default layout."""
     cols = EXPENSE_COLUMNS if kind == "expenses" else INCOME_COLUMNS
     return {h: f.format(r=r) for h, f, _ in cols if f}
+
+
+def sales_layout_error(row: dict, headers: dict) -> str | None:
+    """Older books have no formulas for reduced and intermediate rate sales."""
+    case = (row.get("vat_case") or "").strip().upper()
+    if case in ("PT / C1", "PT / C5") and any(f"Box {b}" not in headers for b in SALES_BOXES[case]):
+        return f"{case} requires the updated income columns and declaration block; upgrade the workbook layout first"
+    return None
 
 
 def expense_letter(header: str) -> str:
@@ -101,6 +123,10 @@ def _i(income_tab: str, header: str, q: str, end: int | None = None) -> str:
 
 
 BLOCK = [  # box, label, formula builder (q, income_tab) -> formula, for the boxes you type
+    ("1", "Base 6%: PT sales", lambda q, it, end: f"={_i(it, 'Box 1', q, end)}"),
+    ("2", "IVA 6% on box 1", lambda q, it, end: f"={_i(it, 'Box 2', q, end)}"),
+    ("5", "Base 13%: PT sales", lambda q, it, end: f"={_i(it, 'Box 5', q, end)}"),
+    ("6", "IVA 13% on box 5", lambda q, it, end: f"={_i(it, 'Box 6', q, end)}"),
     ("3", "Base 23%: PT sales + non-EU purchases (self-charged)", lambda q, it, end: f"={_i(it, 'Box 3', q, end)}+{_e('Box 3', q, end)}"),
     ("4", "IVA 23% on box 3", lambda q, it, end: f"={_i(it, 'Box 4', q, end)}+{_e('Box 4', q, end)}"),
     ("7", "EU business clients, no IVA (+ Recapitulativa)", lambda q, it, end: f"={_i(it, 'Box 7', q, end)}"),
@@ -114,10 +140,17 @@ BLOCK = [  # box, label, formula builder (q, income_tab) -> formula, for the box
     ("61", "Credit from previous quarter (= its box 96)", None),
     ("98", "Q 06-A: non-EU purchases self-charged (base)", lambda q, it, end: f"={_e('Box 98', q, end)}"),
 ]
-RESULTS = [  # box, label, formula on the block's own rows ({c} = quarter column, {rN} = row of box N)
-    ("90", "Total base (1+3+5+7+8+9+10+16+18)", "={c}{r3}+{c}{r7}+{c}{r8}+{c}{r12}+{c}{r16}"),
-    ("91", "IVA in your favour (20+24+61)", "={c}{r20}+{c}{r24}+{c}{r61}"),
-    ("92", "IVA in favour of the State (4+13+17)", "={c}{r4}+{c}{r13}+{c}{r17}"),
+
+
+def _result_sum(box: int, label: str) -> tuple[str, str, str]:
+    fields = RESULT_SUMS[box]
+    description = "+".join(str(field) for field in fields)
+    formula = "=" + "+".join(f"{{c}}{{r{field}}}" for field in fields)
+    return str(box), f"{label} ({description})", formula
+
+
+RESULTS = [  # {c} = quarter column, {rN} = row of box N
+    _result_sum(90, "Total base"), _result_sum(91, "IVA in your favour"), _result_sum(92, "IVA in favour of the State"),
     ("93", "IVA to pay", "=MAX({c}{r92}-{c}{r91},0)"),
     ("94", "IVA to recover", "=MAX({c}{r91}-{c}{r92},0)"),
     ("96", "Credit to carry into next quarter's box 61", "={c}{r94}"),

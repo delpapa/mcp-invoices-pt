@@ -149,12 +149,14 @@ class XlsxTable:
             dup = columns.find_row(recs, row.get(field), field, row.get("supplier_vat", ""))
             if dup is not None:
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
+        ws = self._sheet(wb)
+        head, idx = self._header(ws)
+        if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
+            return {"error": error}
         cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "workbook": self.book.path, "sheet": self.book.names[self.KIND], "quarter": q,
                     "cells": cells}
-        ws = self._sheet(wb)
-        head, idx = self._header(ws)
         formula_headers = set(layout.row_formulas(self.KIND, 0))
         width = max(idx.values())
         # every existing row as {column: value}, keeping columns the user added by hand

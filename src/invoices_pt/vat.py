@@ -11,6 +11,7 @@ from .model import Document
 EU = {"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT",
       "LU", "MT", "NL", "PL", "RO", "SK", "SI", "ES", "SE"}
 NORMAL_RATE = 0.23
+REVERSE_CHARGE_BOXES = {"NON-EU-RC": (3, 4), "EU-RC-GOODS": (12, 13), "EU-RC": (16, 17)}
 
 # Purchase codes and the boxes they fill
 CODES = {
@@ -32,10 +33,20 @@ NONDED_SECTORS = {"Alojamento, restauração": "PT-NONDED-MEAL", "Aquisição de
 
 # Sales
 SALES_CODES = {
+    "PT / C1": "Portuguese client, 6%: boxes 1 + 2",
+    "PT / C5": "Portuguese client, 13%: boxes 5 + 6",
     "PT / C3": "Portuguese client, 23%: boxes 3 + 4",
     "EU / C7": "EU business client, no IVA: box 7 and the Declaração Recapitulativa",
     "NON-EU / C8": "non-EU client, no IVA: box 8",
 }
+
+# Each sales code contributes its net amount and, where applicable, its IVA to these fields.
+SALES_BOXES = {"PT / C1": (1, 2), "PT / C3": (3, 4), "PT / C5": (5, 6),
+               "EU / C7": (7, None), "NON-EU / C8": (8, None)}
+
+# Contributions from the fields supported by these books. In the official form, 12
+# contributes via subtotal 10 and 13 via subtotal 11; neither is counted twice.
+RESULT_SUMS = {90: (1, 3, 5, 7, 8, 12, 16), 91: (20, 24, 61), 92: (2, 4, 6, 13, 17)}
 
 
 def region(country: str) -> str:

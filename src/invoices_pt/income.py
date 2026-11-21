@@ -16,10 +16,18 @@ def _f(x) -> float:
         return 0.0
 
 
-def vat_case(vat_eur: float, not_subject: float, country: str) -> str:
+def vat_case(vat_eur: float, not_subject: float, country: str, *,
+             extra: dict | None = None, net_eur: float | None = None) -> str:
     """Sales code: IVA charged -> PT; no IVA -> box 7 for EU business clients, box 8 outside the EU."""
     if vat_eur > 0:
-        return "PT / C3"
+        if not extra or extra.get("fiscal_space", "PT") != "PT":
+            return ""
+        # Use the printed bases, not a blended rate derived from totals.
+        for band, case in (("normal", "PT / C3"), ("reduced", "PT / C1"), ("intermediate", "PT / C5")):
+            if (net_eur and abs(_f(extra.get(f"base_{band}")) - net_eur) < 0.005
+                    and abs(_f(extra.get(f"vat_{band}")) - vat_eur) < 0.005):
+                return case
+        return ""
     if not_subject > 0 or country:
         return {"EU": "EU / C7", "OutEU": "NON-EU / C8"}.get(vat.region(country), "")
     return ""
@@ -63,6 +71,9 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         names["invoice"] = cfg.income_name("invoice", invoice_date, name_no, os.path.splitext(invoice.file)[1] or ".pdf")
     if at_doc and at_doc.file:
         names["recibo"] = cfg.income_name("recibo", invoice_date, name_no, os.path.splitext(at_doc.file)[1] or ".pdf")
+    case = vat_case(vat_eur, _f(extra.get("not_subject")), country, extra=extra, net_eur=net_eur)
+    if vat_eur > 0 and not case:
+        checks.append("the AT amounts do not identify a single mainland IVA rate; review the rate breakdown before booking")
     row = {
         "invoice_date": invoice_date.isoformat() if invoice_date else "",
         "client": rule.get("name") or client_text,
@@ -78,7 +89,7 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "vat_rate": round(vat_eur / net_eur * 100) if net_eur else 0,
         "vat_eur": vat_eur,
         "withheld": withheld,
-        "vat_case": rule.get("vat_case") or vat_case(vat_eur, _f(extra.get("not_subject")), country),
+        "vat_case": rule.get("vat_case") or case,
         "invoice_file": names.get("invoice", ""),
         "recibo_file": names.get("recibo", ""),
         "account": rule.get("account", ""),

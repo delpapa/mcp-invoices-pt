@@ -111,6 +111,8 @@ class Table:
             if row.get(field) not in (None, "") and (dup := self.find(row[field], field, supplier_vat)):
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         head, idx, values = self._table()
+        if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
+            return {"error": error}
         cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "tab": self.ws.title, "quarter": q, "cells": cells}

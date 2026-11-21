@@ -192,7 +192,7 @@ Excel, LibreOffice or Numbers. A **Google Sheet** is an option: set `backend: go
 
 **Expenses sheet**
 - **Declaração Periódica**, one column per quarter:
-  - the boxes you type on the Portal: 3, 4, 7, 8, 12, 13, 16, 17, 20, 24, 61 and 98;
+  - the boxes you type on the Portal: 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 16, 17, 20, 24, 61 and 98;
   - the boxes the Portal calculates, so you can check them: 90, 91, 92, 93, 94 and 96.
   - Box 61 (the credit carried in) is the previous quarter's box 96. Q1's comes from the previous year's Q4.
 - **QUARTERS**: quarter sums under the table's columns.
@@ -245,9 +245,15 @@ The cells are ordinary formulas, so you can read, check and change the books by 
 
 | Code | When | Boxes |
 |---|---|---|
+| `PT / C1` | Mainland reduced-rate sale, IVA at 6% | 1 + 2 |
+| `PT / C5` | Mainland intermediate-rate sale, IVA at 13% | 5 + 6 |
 | `PT / C3` | Portuguese client, IVA at 23% | 3 + 4 |
 | `EU / C7` | Business client in another EU country, no IVA | 7, and the Declaração Recapitulativa |
 | `NON-EU / C8` | Client outside the EU, no IVA | 8 |
+
+Each income row supports one VAT case. Review sales with multiple rates before booking them. Books created
+with the older layout need income columns and declaration rows for boxes 1, 2, 5 and 6 before booking
+reduced or intermediate rates. Check previously booked sales classified as `PT / C3` against the printed rate.
 
 Box numbers follow the Declaração Periódica in force for periods **before 1 July 2027**. Portaria 298/2026 changes
 the return after that, and this project will follow.

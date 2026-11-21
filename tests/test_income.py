@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pytest
+
 from invoices_pt.config import Config
 from invoices_pt.documents import qr
 from invoices_pt.income import propose
@@ -76,3 +78,21 @@ def test_missing_income(tmp_path):
     assert out["no_at_document"] == ["row 9 04.03.2026 EXC JD002"]
     assert out["file_not_found"] == ["row 8 04.02.2026 EXC JD001: rec1.pdf"]
     assert out["unbooked_files"] == ["stray.pdf"]
+
+
+@pytest.mark.parametrize("base_field,vat_field,tax,rate,case", [
+    ("I3", "I4", 30, 6, "PT / C1"), ("I5", "I6", 65, 13, "PT / C5"),
+])
+def test_propose_uses_printed_sale_rate(qr_png, cfg, base_field, vat_field, tax, rate, case):
+    payload = PT_SALE.replace("I7:", base_field + ":").replace("I8:", vat_field + ":")
+    payload = payload.replace("115.00", str(tax)).replace("615.00", str(500 + tax))
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    assert result["row"]["vat_case"] == case
+    assert result["row"]["vat_rate"] == rate
+
+
+def test_mixed_rate_sale_needs_review(qr_png, cfg):
+    payload = PT_SALE.replace("N:115.00*O:615.00", "I3:100.00*I4:6.00*N:121.00*O:721.00")
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    assert result["row"]["vat_case"] == ""
+    assert any("rate breakdown" in check for check in result["checks"])
