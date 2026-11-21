@@ -97,13 +97,49 @@ def missing_income(records: list[dict], folder: str) -> dict:
     return out
 
 
+def _reconciliation_keys(supplier_vat, invoice_no, day, amount):
+    supplier, number = _n(supplier_vat), _n(invoice_no)
+    payment = (day, amount) if day and amount is not None else None
+    return {"supplier_number": (supplier, number) if supplier and number else None, "number": number,
+            "supplier_payment": (supplier, payment) if supplier and payment else None, "payment": payment}
+
+
+def _unique_positions(keys, field, used):
+    positions = {}
+    for index, alternatives in enumerate(keys):
+        key = alternatives[field]
+        if key and index not in used:
+            positions[key] = None if key in positions else index
+    return positions
+
+
+def _efatura_pairs(docs, records):
+    """Reserve unambiguous number matches before matching the remaining payments."""
+    doc_keys = [_reconciliation_keys(d.supplier_vat, d.invoice_no, d.date, _amount(d.amount)) for d in docs]
+    row_keys = [_reconciliation_keys(r["supplier_vat"], r["invoice_no"], _date(r["date"]), _amount(r["amount"]))
+                for r in records]
+    pairs, used_rows = {}, set()
+    for field in ("supplier_number", "number", "supplier_payment", "payment"):
+        invoices = _unique_positions(doc_keys, field, pairs)
+        rows = _unique_positions(row_keys, field, used_rows)
+        for key, i in invoices.items():
+            j = rows.get(key)
+            if i is None or j is None:
+                continue
+            doc_vat, row_vat = _n(docs[i].supplier_vat), _n(records[j]["supplier_vat"])
+            if doc_vat and row_vat and doc_vat != row_vat:
+                continue
+            pairs[i] = records[j]
+            used_rows.add(j)
+    return pairs
+
+
 def reconcile_efatura(docs: list[Document], records: list[dict]) -> dict:
-    """Match e-Fatura documents to sheet rows by invoice number, else by date and amount."""
-    by_inv = {_n(r["invoice_no"]): r for r in records if r["invoice_no"]}
-    by_day_amount = {(_date(r["date"]), _amount(r["amount"])): r for r in records}
+    """Match e-Fatura documents one-to-one with supplier-compatible rows by number, then date and amount."""
+    pairs = _efatura_pairs(docs, records)
     matched, out = set(), {"not_in_sheet": [], "differences": [], "pt_rows_not_in_efatura": []}
-    for d in docs:
-        r = by_inv.get(_n(d.invoice_no)) or by_day_amount.get((d.date, round(d.amount or 0, 2)))
+    for i, d in enumerate(docs):
+        r = pairs.get(i)
         if not r:
             out["not_in_sheet"].append({"date": d.date.isoformat(), "supplier": d.supplier, "invoice_no": d.invoice_no,
                                         "amount": d.amount, "vat": d.vat_included, "sector": d.extra.get("sector", "")})
@@ -112,11 +148,12 @@ def reconcile_efatura(docs: list[Document], records: list[dict]) -> dict:
         diffs = []
         if _amount(r["amount"]) != round(d.amount or 0, 2):
             diffs.append(f"amount {r['amount']} vs {d.amount}")
-        if r["vat_included"] and _amount(r["vat_included"]) != round(d.vat_included or 0, 2):
+        has_vat = r["vat_included"] not in (None, "")
+        if has_vat and _amount(r["vat_included"]) != round(d.vat_included or 0, 2):
             diffs.append(f"VAT {r['vat_included']} vs {d.vat_included}")
         if r["invoice_no"] and _n(r["invoice_no"]) != _n(d.invoice_no):
             diffs.append(f"invoice no. {r['invoice_no']} vs {d.invoice_no}")
-        if not r["invoice_no"] or not r["vat_included"] or not r["supplier_vat"]:
+        if not r["invoice_no"] or not has_vat or not r["supplier_vat"]:
             diffs.append("sheet is missing fields e-Fatura has")
         if diffs:
             out["differences"].append({"row": r["row"], "efatura": d.to_dict(), "issues": diffs})

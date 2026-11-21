@@ -50,3 +50,55 @@ def test_reconcile_efatura():
     assert [d["invoice_no"] for d in out["not_in_sheet"]] == ["FS 8/1"]
     assert [d["row"] for d in out["differences"]] == [32]
     assert out["pt_rows_not_in_efatura"] == ["row 33 09.03.2026 Landlord 500.00"]
+
+
+def test_reconcile_same_number_and_payment_from_different_suppliers():
+    day = dt.date(2026, 3, 4)
+    suppliers = ["PT500000001", "PT500000002", "PT500000003"]
+    docs = [Document(layer="efatura", date=day, invoice_no="FT 1", amount=10, vat_included=1,
+                     supplier_vat=vat, supplier=name) for vat, name in zip(suppliers, ("Café A", "Café B", "Café C"))]
+    rows = [rec(31, day.isoformat(), "Café A", "10", "ft1", vat="1", supplier_vat=suppliers[0]),
+            rec(32, day.isoformat(), "Café B", "10", "FT 1", vat="1", supplier_vat=suppliers[1])]
+    for entries in (docs, docs[::-1]):
+        report = reconcile_efatura(entries, rows)
+        assert [d["supplier"] for d in report["not_in_sheet"]] == ["Café C"]
+        assert report["differences"] == []
+        assert report["pt_rows_not_in_efatura"] == []
+
+
+def test_reconcile_reserves_number_match_before_payment_fallback():
+    day = dt.date(2026, 3, 4)
+    docs = [Document(layer="efatura", date=day, invoice_no=number, amount=10, vat_included=1, supplier_vat="PT1")
+            for number in ("FT 7", "FT 8")]
+    rows = [rec(31, day.isoformat(), "Shop", "10", "FT 8", vat="1", supplier_vat="PT1")]
+    report = reconcile_efatura(docs, rows)
+    assert [d["invoice_no"] for d in report["not_in_sheet"]] == ["FT 7"]
+    assert report["differences"] == []
+
+
+def test_reconcile_leaves_ambiguous_legacy_rows_for_review():
+    day = dt.date(2026, 3, 4)
+    # Legacy expense rows may have no supplier VAT or invoice number.
+    rows = [rec(31, day.isoformat(), "Shop A", "10"), rec(32, day.isoformat(), "Shop B", "10")]
+    doc = Document(layer="efatura", date=day, invoice_no="FT 1", supplier_vat="PT1", amount=10, vat_included=1)
+    report = reconcile_efatura([doc], rows)
+    assert [d["invoice_no"] for d in report["not_in_sheet"]] == ["FT 1"]
+    assert report["differences"] == []
+
+
+def test_reconcile_rejects_a_unique_candidate_with_a_different_supplier_vat():
+    doc = Document(layer="efatura", date=dt.date(2026, 1, 1), invoice_no="FT 1",
+                   supplier_vat="PT500000001", amount=10, vat_included=1)
+    row = rec(31, "01.01.2026", "Other", "10", "FT 1", vat="1", supplier_vat="PT500000002")
+    report = reconcile_efatura([doc], [row])
+    assert [d["invoice_no"] for d in report["not_in_sheet"]] == ["FT 1"]
+    assert report["pt_rows_not_in_efatura"] == ["row 31 01.01.2026 Other 10"]
+
+
+def test_reconcile_treats_xlsx_numeric_zero_as_recorded_vat():
+    doc = Document(layer="efatura", date=dt.date(2026, 1, 1), invoice_no="FT 1",
+                   supplier_vat="PT1", amount=10, vat_included=0)
+    row = rec(31, "01.01.2026", "Shop", 10, "FT 1", vat=0, supplier_vat="PT1")
+    assert reconcile_efatura([doc], [row])["differences"] == []
+    doc.vat_included = 1.0
+    assert reconcile_efatura([doc], [row])["differences"][0]["issues"] == ["VAT 0 vs 1.0"]
