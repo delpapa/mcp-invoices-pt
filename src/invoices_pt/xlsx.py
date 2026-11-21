@@ -228,6 +228,9 @@ class XlsxExpenses(XlsxTable):
         boxes, quarters = self._block(ws)
         filed = XlsxBook.filed(wb)
         frozen = {q: {b: bookmath.num(ws.cell(r, quarters[q]).value) or 0.0 for b, r in boxes.items()} for q in filed}
+        for q in filed:
+            if 96 not in boxes or bookmath.num(ws.cell(boxes[96], quarters[q]).value) is None:
+                raise ValueError(f"missing or invalid {q} box 96 in the books for {self.book.year}")
         opening = bookmath.num(ws.cell(boxes[61], quarters["Q1"]).value) or 0.0
         all_q = bookmath.declaration(self._records(wb), self.book.income._records(wb), opening, frozen)
         return all_q, filed

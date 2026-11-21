@@ -41,3 +41,18 @@ def test_sheets_carry_forward_failures(cfg, monkeypatch):
     previous.worksheets.side_effect = PermissionError("spreadsheet unavailable")
     with pytest.raises(PermissionError):
         opening_credit(cfg, 2026)
+
+
+def test_unreadable_filed_credit_cannot_be_carried_as_zero(cfg):
+    from invoices_pt.books import create_year, open_books
+
+    create_year(cfg, 2025, credit=100)
+    expenses, _ = open_books(cfg, 2025)
+    expenses.freeze("Q4", dry_run=False)
+    wb = expenses.book.load()
+    ws = wb["Expenses"]
+    boxes, quarters = expenses._block(ws)
+    ws.cell(boxes[96], quarters["Q4"]).value = "unreadable"
+    expenses.book.save(wb)
+    with pytest.raises(ValueError, match="96"):
+        opening_credit(cfg, 2026)
