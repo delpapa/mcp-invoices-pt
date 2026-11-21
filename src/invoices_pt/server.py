@@ -12,7 +12,7 @@ from .config import Config
 from .declaration import find_return_pdf, parse_return_pdf
 from . import inbox
 from .documents import efatura, text
-from .extract import expense_row, proposal, read_document
+from .extract import expense_row, matching_documents, proposal, read_document
 from .filing import file_document as file_document_
 from .filing import index_folder
 from .income import propose as propose_income_
@@ -79,7 +79,7 @@ def extract(path: str, read_anyway: bool = False) -> dict:
     doc = read_document(path)
     ledger = _ledger(cfg)
     digest = sha256(path)
-    others = [r for r in ledger.by_key(doc.key) if r["sha256"] != digest] if doc.invoice_no else []
+    others = [r for r in matching_documents(doc, ledger) if r["sha256"] != digest]
     ledger.record(digest, path, doc.key, doc.layer, "extracted")
     out = {"document": doc.to_dict(), "proposal": proposal(doc, cfg), "same_invoice_elsewhere": others}
     if doc.layer == "text":

@@ -1,8 +1,13 @@
 import os
 
-from invoices_pt.filing import file_document, index_folder
-from invoices_pt.ledger import Ledger
+import pytest
+from PIL import Image
 
+from invoices_pt import inbox
+from invoices_pt.filing import file_document, index_folder
+from invoices_pt.ledger import Ledger, sha256
+
+from conftest import AT_PAYLOAD
 from test_efatura import CSV
 
 
@@ -57,3 +62,33 @@ def test_efatura_export_goes_to_year_root(cfg, tmp_path):
     src.write_text(CSV, encoding="utf-8")
     done = file_document(cfg, ledger, str(src), dry_run=False)
     assert os.path.dirname(done["to"]) == p["year_root"] and os.path.basename(done["to"]).startswith("eFatura_2026_export_")
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["current-ledger", "legacy-ledger"])
+def test_credit_note_with_same_supplier_and_number(qr_png, cfg, tmp_path, legacy):
+    _, ledger = _setup(cfg)
+    folder = tmp_path / "inbox"
+    payload = AT_PAYLOAD.replace("G:FT A1/42", "G:A1/42")
+    invoice = qr_png(payload, folder=folder)
+    filed = file_document(cfg, ledger, invoice, dry_run=False)["to"]
+    if legacy:
+        ledger.record(sha256(filed), filed, "PT500000000|A1/42", "document", "filed")
+    credit_payload = payload.replace("D:FT", "D:NC").replace("H:ABCD1234-42", "H:EFGH5678-42")
+    credit = qr_png(credit_payload, folder=folder, name="credit.png")
+
+    result = file_document(cfg, ledger, credit, dry_run=False)
+    assert os.path.isfile(credit), result
+    assert "already exists" in result["error"]  # same default filename, different document
+    plan = inbox.plan(cfg, ledger)
+    assert not plan["copies"] and [e["path"] for e in plan["expenses"]] == [credit]
+    moved = file_document(cfg, ledger, credit, name="credit-note.png", dry_run=False)
+    assert moved["status"] == "moved"
+    assert os.path.isfile(filed) and os.path.isfile(moved["to"])
+
+    # A differently encoded image of the invoice still matches the filed invoice.
+    download = str(folder / "download.png")
+    with Image.open(filed) as image:
+        image.save(download, compress_level=0)
+    assert sha256(download) != sha256(filed)
+    duplicate = file_document(cfg, ledger, download, dry_run=False)
+    assert duplicate["existing"] == filed and duplicate["deleted"]

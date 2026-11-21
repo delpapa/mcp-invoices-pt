@@ -11,7 +11,7 @@ import shutil
 
 from .config import Config
 from .documents import efatura
-from .extract import proposal, read_document
+from .extract import matching_documents, proposal, read_document
 from .ledger import Ledger, sha256
 from .model import Document
 
@@ -42,18 +42,18 @@ def index_folder(folder: str, ledger: Ledger) -> dict:
         except Exception as e:
             counts["failed"].append(f"{name}: {e}")
             continue
-        ledger.record(digest, path, doc.key if doc.invoice_no else "", doc.layer, "filed")
+        ledger.record(digest, path, doc.key, doc.layer, "filed")
         counts["indexed"] += 1
     return counts
 
 
-def _filed_copy(ledger: Ledger, digest: str, key: str) -> str | None:
+def _filed_copy(ledger: Ledger, digest: str, doc: Document | None) -> str | None:
     """Path of a filed file with the same content, or the same invoice, that still exists."""
     same = ledger.get(digest)
     if same and same["status"] == "filed" and os.path.exists(same["path"]):
         return same["path"]
-    if key and not key.endswith("|"):
-        for r in ledger.by_key(key):
+    if doc is not None:
+        for r in matching_documents(doc, ledger):
             if r["status"] == "filed" and r["sha256"] != digest and os.path.exists(r["path"]):
                 return r["path"]
     return None
@@ -69,16 +69,15 @@ def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_ru
         docs = efatura.parse_csv(path)
         year = max(d.date for d in docs).year if docs else dt.date.today().year
         dest = os.path.join(cfg.paths(year)["year_root"], name or f"eFatura_{year}_export_{dt.date.today():%Y%m%d}.csv")
-        key = ""
+        doc = None
     else:
         doc = read_document(path)
         if not doc.date:
             return {"error": "no date read from the document; pass the fields to add_expense and a name to file_document"}
         year = doc.date.year
-        key = doc.key if doc.invoice_no else ""
         dest = os.path.join(target_dir(cfg, doc, year), name or proposal(doc, cfg)["file_name"])
 
-    copy = _filed_copy(ledger, digest, key)
+    copy = _filed_copy(ledger, digest, doc)
     if copy and os.path.realpath(copy) == os.path.realpath(path):
         return {"status": "already_filed", "path": copy}
     if copy:
@@ -94,5 +93,5 @@ def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_ru
         return {"dry_run": True, "status": "would_move", "to": dest}
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.move(path, dest)
-    ledger.record(digest, dest, key, "csv" if dest.endswith(".csv") else "document", "filed")
+    ledger.record(digest, dest, doc.key if doc else "", "document" if doc else "csv", "filed")
     return {"status": "moved", "to": dest}

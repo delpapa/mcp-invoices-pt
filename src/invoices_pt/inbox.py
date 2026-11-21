@@ -7,7 +7,7 @@ import os
 
 from .config import Config
 from .documents import efatura, text
-from .extract import expense_row, proposal, read_document
+from .extract import expense_row, matching_documents, proposal, read_document
 from .income import propose as propose_income
 from .ledger import Ledger, sha256
 from .model import Document
@@ -119,8 +119,7 @@ def plan(cfg: Config, ledger: Ledger) -> dict:
         if doc.doc_type == "sales_invoice" or (cfg.nif and doc.supplier_vat == "PT" + cfg.nif):
             (invoices if doc.doc_type == "sales_invoice" else at_docs).append(doc)
             continue
-        filed = [r for r in ledger.by_key(doc.key) if r["status"] == "filed" and os.path.exists(r["path"])] \
-            if doc.invoice_no else []
+        filed = [r for r in matching_documents(doc, ledger) if r["status"] == "filed" and os.path.exists(r["path"])]
         if filed:                                   # the same invoice downloaded again (different file bytes)
             out["copies"].append({"path": path, "same_as": filed[0]["path"]})
             continue

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import asdict, dataclass, field
 
 # Facts read from a document that drive the VAT coding (see vat.suggest_code).
@@ -36,10 +37,22 @@ class Document:
     text: str = ""                  # raw text, only kept when no structured layer matched
 
     @property
-    def key(self) -> str:
-        """Identity used to spot the same invoice arriving twice."""
+    def _supplier_and_number(self) -> tuple[str, str]:
         who = (self.supplier_vat or self.supplier).replace(" ", "").upper()
-        return f"{who}|{self.invoice_no.replace(' ', '').upper()}"
+        return who, self.invoice_no.replace(" ", "").upper()
+
+    @property
+    def legacy_key(self) -> str:
+        """Key stored by ledgers created before document type was part of the identity."""
+        return "|".join(self._supplier_and_number)
+
+    @property
+    def key(self) -> str:
+        """A numbered document is identified by its issuer, document type and number."""
+        who, number = self._supplier_and_number
+        if not (who and self.doc_type and number):
+            return ""
+        return json.dumps([who, self.doc_type, number], ensure_ascii=False)
 
     def to_dict(self) -> dict:
         d = asdict(self)

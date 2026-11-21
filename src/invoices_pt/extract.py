@@ -8,6 +8,7 @@ import re
 from . import fx, vat
 from .config import Config
 from .documents import parsers, qr, text
+from .ledger import Ledger
 from .model import Document
 
 SHEET_LABELS = {"qr": "PDF ✓ QR-verified", "efatura": "e-Fatura only"}
@@ -23,6 +24,22 @@ def read_document(path: str) -> Document:
     doc.card_last4 = doc.card_last4 or text.card_last4(raw)
     doc.markers = sorted(set(doc.markers) | set(text.markers(raw)))
     return doc
+
+
+def matching_documents(doc: Document, ledger: Ledger) -> list[dict]:
+    """Look up a document by identity, verifying ambiguous entries from older ledgers."""
+    if not doc.key:
+        return []
+    matches = ledger.by_key(doc.key)
+    for row in ledger.by_key(doc.legacy_key):
+        try:
+            previous = read_document(row["path"])
+        except Exception:
+            # A missing or unreadable original cannot establish a duplicate.
+            continue
+        if previous.key == doc.key:
+            matches.append(row)
+    return matches
 
 
 def _slug(doc: Document, rule: dict) -> str:
