@@ -8,6 +8,7 @@ so both agree to the cent.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from .vat import NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES
@@ -26,15 +27,25 @@ def r2(x: float) -> float:
 
 
 def num(v) -> float | None:
-    """A cell value (number or text like '1,234.56', '25%', '€3.10') as a float."""
+    """Read a numeric cell or US/Portuguese numeric text, keeping '1,234' as a thousands grouping."""
     if v is None or v == "":
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    s = str(v).strip().replace(",", "").replace("€", "").replace("$", "")
+    s = str(v).replace("€", "").replace("$", "").strip()
     pct = s.endswith("%")
+    s = s.removesuffix("%").strip()
+    if re.fullmatch(r"[+-]?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?", s):
+        s = "".join(s.split())
+    if "," in s:
+        if re.fullmatch(r"[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?", s):
+            s = s.replace(",", "")
+        elif re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+", s):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            return None
     try:
-        x = float(s.rstrip("%"))
+        x = float(s)
     except ValueError:
         return None
     return x / 100 if pct else x

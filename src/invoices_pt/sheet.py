@@ -13,7 +13,7 @@ import re
 import gspread
 from google.oauth2.service_account import Credentials
 
-from . import columns, layout
+from . import bookmath, columns, layout
 from .config import Config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -23,14 +23,6 @@ GREY = {"red": 0.93, "green": 0.93, "blue": 0.93}
 
 def quarter(day: dt.date) -> str:
     return f"Q{(day.month - 1) // 3 + 1}"
-
-
-def _num(s: str) -> float | None:
-    s = (s or "").replace(",", "").replace("€", "").strip()
-    try:
-        return float(s)
-    except ValueError:
-        return None
 
 
 def _col(j: int) -> str:
@@ -66,11 +58,11 @@ class Table:
         self.columns = {**self.COLUMNS, **cfg.column_overrides(self.KIND)}
         self.date_field = next(iter(self.COLUMNS))
 
-    def _table(self) -> tuple[int, dict[str, int], list[list[str]]]:
-        values = self.ws.get_all_values()
+    def _table(self, value_render_option: str = "FORMATTED_VALUE") -> tuple[int, dict[str, int], list[list]]:
+        values = self.ws.get_all_values(value_render_option=value_render_option)
         first = self.columns[self.date_field]
-        head = next(i for i, r in enumerate(values) if r and r[0].strip() == first)
-        index = {h.strip(): j for j, h in enumerate(values[head]) if h.strip()}
+        head = next(i for i, r in enumerate(values) if r and str(r[0]).strip() == first)
+        index = {str(h).strip(): j for j, h in enumerate(values[head]) if str(h).strip()}
         missing = [h for h in self.columns.values() if h.strip() not in index]
         if missing:
             raise KeyError(f"{self.ws.title}: headers not found: {missing}; map them in the config")
@@ -161,16 +153,17 @@ class IncomeSheet(Table):
 
     def summary(self) -> list[dict]:
         """The rows above the table (IRS and Segurança Social totals): label and the values per quarter."""
-        head, _, values = self._table()
+        head, _, values = self._table(value_render_option="UNFORMATTED_VALUE")
         quarters = None
         out = []
         for r in values[:head - 1]:
-            cells = [c.strip() for c in r]
+            cells = [str(c).strip() for c in r]
             if "Q1" in cells:
                 quarters = {c: j for j, c in enumerate(cells) if re.fullmatch(r"Q[1-4]|\d{4}", c)}
                 continue
             if quarters and cells and cells[0]:
-                out.append({"item": cells[0], **{q: _num(r[j]) if j < len(r) else None for q, j in quarters.items()}})
+                out.append({"item": cells[0], **{q: bookmath.num(r[j]) if j < len(r) else None
+                                               for q, j in quarters.items()}})
         return out
 
 
@@ -185,25 +178,27 @@ class ExpenseSheet(Table):
         self.cfg, self.year = cfg, year
 
     # ---- the "Declaração Periódica" block above the table: rows "Box n", one column per quarter
-    def _block(self) -> tuple[list[list[str]], list[list], dict[str, int], dict[str, int]]:
-        values = self.ws.get_all_values()
+    def _block(self) -> tuple[list[list], list[list], dict[str, int], dict[str, int]]:
+        values = self.ws.get_all_values(value_render_option="UNFORMATTED_VALUE")
         formulas = self.ws.get_all_values(value_render_option="FORMULA")
-        head = next(i for i, r in enumerate(values) if r and r[0].strip() == self.columns["date"])
-        boxes = {m.group(1): i for i, r in enumerate(values[:head]) if r and (m := re.match(r"^Box (\d+)$", r[0].strip()))}
+        head = next(i for i, r in enumerate(values) if r and str(r[0]).strip() == self.columns["date"])
+        boxes = {m.group(1): i for i, r in enumerate(values[:head])
+                 if r and (m := re.match(r"^Box (\d+)$", str(r[0]).strip()))}
         if not boxes:
             raise KeyError("no 'Box n' rows above the table")
         top = min(boxes.values())
-        header = next(values[i] for i in range(top - 1, -1, -1) if any(c.strip() in ("Q1", "Q2", "Q3", "Q4") for c in values[i]))
-        quarters = {c.strip(): j for j, c in enumerate(header) if c.strip() in ("Q1", "Q2", "Q3", "Q4")}
+        header = next(row for row in reversed(values[:top]) if any(str(c).strip() in bookmath.QUARTERS for c in row))
+        quarters = {str(c).strip(): j for j, c in enumerate(header) if str(c).strip() in bookmath.QUARTERS}
         return values, formulas, boxes, quarters
 
     def declaration(self, q: str) -> dict:
         """Box values of one quarter as shown in the block, and whether they are still live formulas."""
         values, formulas, boxes, quarters = self._block()
         j = quarters[q]
-        rows = [{"box": int(b), "label": values[i][2] if len(values[i]) > 2 else "", "value": _num(values[i][j])}
+        rows = [{"box": int(b), "label": values[i][2] if len(values[i]) > 2 else "",
+                 "value": bookmath.num(values[i][j]) if j < len(values[i]) else None}
                 for b, i in sorted(boxes.items(), key=lambda kv: kv[1])]
-        live = any(str(formulas[i][j]).startswith("=") for i in boxes.values())
+        live = any(j < len(formulas[i]) and str(formulas[i][j]).startswith("=") for i in boxes.values())
         return {"quarter": q, "boxes": rows, "filed": q in self.filed_quarters(), "live_formulas": live}
 
     def set_declaration(self, q: str, box_values: dict[int, float]) -> None:
@@ -219,7 +214,7 @@ class ExpenseSheet(Table):
         values, formulas, boxes, quarters = self._block()
         j = quarters[q]
         first, last = min(boxes.values()), max(boxes.values())
-        live = [i for i in boxes.values() if str(formulas[i][j]).startswith("=")]
+        live = [i for i in boxes.values() if j < len(formulas[i]) and str(formulas[i][j]).startswith("=")]
         exp_rows = [r["row"] for r in self.records() if r["quarter"] == q]
         income = IncomeSheet(self.cfg, self.year, self.sh)
         i_head, i_idx, _ = income._table()

@@ -7,6 +7,7 @@ import datetime as dt
 import os
 import re
 
+from .bookmath import num
 from .model import Document
 
 DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
@@ -17,10 +18,8 @@ def _n(s) -> str:
 
 
 def _amount(s) -> float | None:
-    try:
-        return round(float(str(s).replace(",", "")), 2)
-    except ValueError:
-        return None
+    value = num(s)
+    return round(value, 2) if value is not None else None
 
 
 def _date(s: str) -> dt.date | None:
