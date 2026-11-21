@@ -103,7 +103,7 @@ def read_efatura(csv_path: str) -> list[dict]:
 @mcp.tool()
 def add_expense(row: dict, dry_run: bool = True) -> dict:
     """Add one expense row to the year's expenses tab. `row` keys: date (YYYY-MM-DD), expense, supplier,
-    country, supplier_vat, invoice_no, currency, amount, vat_included, fx, nif, code, business_pct, document,
+    country, supplier_vat, invoice_no, doc_type, currency, amount, vat_included, fx, nif, code, business_pct, document,
     file, account. Refuses duplicates and quarters already filed. Call with dry_run=true first."""
     cfg = _cfg()
     year = dt.date.fromisoformat(str(row["date"])).year

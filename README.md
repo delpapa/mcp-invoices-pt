@@ -222,8 +222,13 @@ The cells are ordinary formulas, so you can read, check and change the books by 
 | **Net VAT benefit €** | IVA you get back minus IVA you self-charge (0 for reverse charge) |
 | **IRS deductible €** | The business cost for IRS: what you paid, times the business share, minus the IVA you recover |
 | **Document** | What backs the row: QR-verified PDF, invoice, receipt, e-Fatura only, no invoice, MISSING |
+| **Document type** | Type used in duplicate checks, such as `invoice` or `credit_note` |
 | **Payment account** | Which card or account paid |
 | **Q** | The quarter, from the date |
+
+On older expense sheets you can append a **Document type** header to the right of the table and fill in the types
+for any historical rows with overlapping numbers. A blank or absent type keeps the original duplicate check by
+supplier VAT ID and invoice number.
 
 ### VAT codes (purchases)
 

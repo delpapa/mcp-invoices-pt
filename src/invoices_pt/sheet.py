@@ -63,7 +63,7 @@ class Table:
         first = self.columns[self.date_field]
         head = next(i for i, r in enumerate(values) if r and str(r[0]).strip() == first)
         index = {str(h).strip(): j for j, h in enumerate(values[head]) if str(h).strip()}
-        missing = [h for h in self.columns.values() if h.strip() not in index]
+        missing = [h for h in columns.table_fields(self.columns, index).values() if h.strip() not in index]
         if missing:
             raise KeyError(f"{self.ws.title}: headers not found: {missing}; map them in the config")
         return head + 1, index, values
@@ -72,11 +72,12 @@ class Table:
         """Every table row as {field: value}, plus its row number and quarter."""
         head, idx, values = self._table()
         qcol = next((j for h, j in idx.items() if QUARTER_HEADER.match(h)), None)
+        mapped = columns.table_fields(self.columns, idx)
         out = []
         for rn, r in enumerate(values[head:], head + 1):
             if not any(r):
                 continue
-            rec = {f: (r[idx[h.strip()]] if idx[h.strip()] < len(r) else "") for f, h in self.columns.items()}
+            rec = {f: (r[idx[h.strip()]] if idx[h.strip()] < len(r) else "") for f, h in mapped.items()}
             rec["row"] = rn
             rec["quarter"] = r[qcol] if qcol is not None and qcol < len(r) else ""
             out.append(rec)
@@ -90,8 +91,8 @@ class Table:
         return {m.group(1) for p in self._protections() if p["range"]["sheetId"] == self.ws.id
                 and (m := re.match(r"^(Q\d) filed", p.get("description", "")))}
 
-    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "") -> int | None:
-        return columns.find_row(self.records(), value, field, supplier_vat)
+    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "", doc_type: str = "") -> int | None:
+        return columns.find_row(self.records(), value, field, supplier_vat, doc_type)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
         day = dt.date.fromisoformat(str(row[self.date_field]))
@@ -99,13 +100,15 @@ class Table:
         if q in self.filed_quarters() and not allow_filed:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         supplier_vat = row.get("supplier_vat", "")
+        doc_type = row.get("doc_type", "")
         for field in self.UNIQUE:
-            if row.get(field) not in (None, "") and (dup := self.find(row[field], field, supplier_vat)):
+            if row.get(field) not in (None, "") and (dup := self.find(row[field], field, supplier_vat, doc_type)):
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         head, idx, values = self._table()
         if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
             return {"error": error}
-        cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
+        mapped = columns.table_fields(self.columns, idx)
+        cells = {mapped[k]: v for k, v in row.items() if k in mapped and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "tab": self.ws.title, "quarter": q, "cells": cells}
         filled = [i + 1 for i, r in enumerate(values) if i >= head and any(r)]
@@ -129,7 +132,7 @@ class Table:
             for header, formula in layout.row_formulas(self.KIND, new).items():
                 if header in idx:
                     updates.append({"range": gspread.utils.rowcol_to_a1(new, idx[header] + 1), "values": [[formula]]})
-        for field, header in self.columns.items():
+        for field, header in mapped.items():
             value = row.get(field, "")
             if field in self.TEXT_FIELDS and value:
                 value = "'" + str(value)
@@ -141,7 +144,7 @@ class Table:
                       "endColumnIndex": width},
             "sortSpecs": [{"dimensionIndex": 0, "sortOrder": "ASCENDING"}]}}]})
         key = next((f for f in self.UNIQUE if row.get(f) not in (None, "")), None)
-        new_row = self.find(row[key], key, supplier_vat) if key else None
+        new_row = self.find(row[key], key, supplier_vat, doc_type) if key else None
         return {"written": True, "tab": self.ws.title, "quarter": q, "row": new_row}
 
 

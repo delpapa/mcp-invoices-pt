@@ -88,7 +88,7 @@ class XlsxTable:
         for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 200)):
             if row[0].value is not None and str(row[0].value).strip() == first:
                 index = {str(c.value).strip(): c.column for c in row if c.value is not None}
-                missing = [h for h in self.columns.values() if h.strip() not in index]
+                missing = [h for h in columns.table_fields(self.columns, index).values() if h.strip() not in index]
                 if missing:
                     raise KeyError(f"{ws.title}: headers not found: {missing}; map them in the config")
                 return row[0].row, index
@@ -97,9 +97,10 @@ class XlsxTable:
     def _records(self, wb) -> list[dict]:
         ws = self._sheet(wb)
         head, idx = self._header(ws)
+        mapped = columns.table_fields(self.columns, idx)
         out = []
         for r in range(head + 1, ws.max_row + 1):
-            raw = {f: ws.cell(r, idx[h.strip()]).value for f, h in self.columns.items()}
+            raw = {f: ws.cell(r, idx[h.strip()]).value for f, h in mapped.items()}
             if all(v in (None, "") for v in raw.values()):
                 continue
             rec = {}
@@ -122,8 +123,8 @@ class XlsxTable:
     def filed_quarters(self) -> set[str]:
         return set(XlsxBook.filed(self.book.load()))
 
-    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "") -> int | None:
-        return columns.find_row(self.records(), value, field, supplier_vat)
+    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "", doc_type: str = "") -> int | None:
+        return columns.find_row(self.records(), value, field, supplier_vat, doc_type)
 
     # ---- writing
     def _cell_value(self, field: str, v):
@@ -146,14 +147,15 @@ class XlsxTable:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         recs = self._records(wb)
         for field in columns.UNIQUE[self.KIND]:
-            dup = columns.find_row(recs, row.get(field), field, row.get("supplier_vat", ""))
+            dup = columns.find_row(recs, row.get(field), field, row.get("supplier_vat", ""), row.get("doc_type", ""))
             if dup is not None:
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         ws = self._sheet(wb)
         head, idx = self._header(ws)
         if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
             return {"error": error}
-        cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
+        mapped = columns.table_fields(self.columns, idx)
+        cells = {mapped[k]: v for k, v in row.items() if k in mapped and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "workbook": self.book.path, "sheet": self.book.names[self.KIND], "quarter": q,
                     "cells": cells}
@@ -163,11 +165,11 @@ class XlsxTable:
         rows = []
         for r in range(head + 1, ws.max_row + 1):
             vals = {c: ws.cell(r, c).value for c in range(1, width + 1)}
-            inputs = [vals[idx[h.strip()]] for h in self.columns.values()]
+            inputs = [vals[idx[h.strip()]] for h in mapped.values()]
             if any(v not in (None, "") for v in inputs):
                 rows.append(vals)
         new = {c: None for c in range(1, width + 1)}
-        for field, header in self.columns.items():
+        for field, header in mapped.items():
             new[idx[header.strip()]] = self._cell_value(field, row.get(field))
         new["_new"] = True
         rows.append(new)

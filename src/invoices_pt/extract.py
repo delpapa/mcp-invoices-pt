@@ -49,7 +49,7 @@ def expense_row(doc: Document, prop: dict, expense: str = "") -> dict:
     return {
         "date": doc.date.isoformat() if doc.date else "", "expense": expense or _slug(doc, {"slug": prop.get("slug")}),
         "supplier": prop["supplier"], "country": doc.country, "supplier_vat": doc.supplier_vat,
-        "invoice_no": doc.invoice_no, "currency": doc.currency, "amount": doc.amount,
+        "invoice_no": doc.invoice_no, "doc_type": doc.doc_type, "currency": doc.currency, "amount": doc.amount,
         "vat_included": doc.vat_included, "fx": fx_rate, "nif": prop["nif_on_invoice"], "code": prop["vat_code"],
         "business_pct": prop["business_pct"], "document": prop["document"], "file": prop["file_name"],
         "account": prop["account"],

@@ -51,7 +51,7 @@ EXPENSE_COLUMNS = [
     ("Box 98", "=R{r}", "num"),
     ("Net VAT benefit €", "=X{r}+Y{r}-S{r}-U{r}-W{r}", "num"),
     ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*' + BUSINESS_SHARE + '-AA{r},2))', "num"),
-    ("Document", None, ""), ("File", None, ""), ("Payment account", None, ""),
+    ("Document", None, ""), ("File", None, ""), ("Payment account", None, ""), ("Document type", None, ""),
 ]
 
 
