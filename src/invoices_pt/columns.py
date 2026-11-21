@@ -14,7 +14,7 @@ INCOME_FIELDS = {
     "invoice_file": "Invoice file", "recibo_file": "Recibo file", "account": "Account",
 }
 TEXT_FIELDS = {"expenses": ("supplier_vat", "invoice_no"), "income": ("client_tax_id", "invoice_no", "recibo_no")}
-# Fields that identify a row; a second row with the same value is refused. Own invoice numbers can repeat when a
+# Expenses also compare the supplier VAT number when available. Own invoice numbers can repeat when a
 # template is not updated, so sales are identified by the AT document number and the invoice file.
 UNIQUE = {"expenses": ("invoice_no",), "income": ("recibo_no", "invoice_file")}
 DATE_FIELDS = {"date", "invoice_date", "recibo_date"}
@@ -23,3 +23,19 @@ NUMBER_FIELDS = {"amount", "vat_included", "fx", "business_pct", "net_eur", "vat
 
 def fields(kind: str) -> dict[str, str]:
     return dict(EXPENSE_FIELDS if kind == "expenses" else INCOME_FIELDS)
+
+
+def _identifier(value) -> str:
+    return "" if value is None else "".join(str(value).split()).upper()
+
+
+def find_row(records: list[dict], value, field: str, supplier_vat: str = "") -> int | None:
+    """Find a matching identifier, allowing for a missing supplier VAT ID on either row."""
+    wanted = _identifier(value)
+    if not wanted:
+        return None
+    vat = _identifier(supplier_vat)
+    for rec in records:
+        if _identifier(rec.get(field)) == wanted and (not vat or _identifier(rec.get("supplier_vat")) in ("", vat)):
+            return rec["row"]
+    return None

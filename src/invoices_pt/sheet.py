@@ -25,10 +25,6 @@ def quarter(day: dt.date) -> str:
     return f"Q{(day.month - 1) // 3 + 1}"
 
 
-def _norm(s: str) -> str:
-    return re.sub(r"\s+", "", s or "").upper()
-
-
 def _num(s: str) -> float | None:
     s = (s or "").replace(",", "").replace("€", "").strip()
     try:
@@ -103,30 +99,23 @@ class Table:
                 and (m := re.match(r"^(Q\d) filed", p.get("description", "")))}
 
     def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "") -> int | None:
-        head, idx, values = self._table()
-        want, vat_ = _norm(value), _norm(supplier_vat)
-        j = idx[self.columns[field].strip()]
-        jv = idx.get(self.columns.get("supplier_vat", "").strip())
-        for rn, r in enumerate(values[head:], head + 1):
-            if want and j < len(r) and _norm(r[j]) == want and (
-                    not vat_ or jv is None or _norm(r[jv]) in ("", vat_)):
-                return rn
-        return None
+        return columns.find_row(self.records(), value, field, supplier_vat)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
         day = dt.date.fromisoformat(str(row[self.date_field]))
         q = quarter(day)
         if q in self.filed_quarters() and not allow_filed:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
+        supplier_vat = row.get("supplier_vat", "")
         for field in self.UNIQUE:
-            if row.get(field) and (dup := self.find(row[field], field, row.get("supplier_vat", ""))):
+            if row.get(field) not in (None, "") and (dup := self.find(row[field], field, supplier_vat)):
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         head, idx, values = self._table()
         cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "tab": self.ws.title, "quarter": q, "cells": cells}
         filled = [i + 1 for i, r in enumerate(values) if i >= head and any(r)]
-        dated = [i + 1 for i, r in enumerate(values) if i >= head and r[0]]
+        dated = [i + 1 for i, r in enumerate(values) if i >= head and r and r[0]]
         last = max(filled) if filled else head          # an empty table: insert right under the header
         template = max(dated) if dated else None
         width = max(idx.values()) + 1
@@ -157,8 +146,9 @@ class Table:
             "range": {"sheetId": sid, "startRowIndex": head, "endRowIndex": new, "startColumnIndex": 0,
                       "endColumnIndex": width},
             "sortSpecs": [{"dimensionIndex": 0, "sortOrder": "ASCENDING"}]}}]})
-        key = next((f for f in self.UNIQUE if row.get(f)), None)
-        return {"written": True, "tab": self.ws.title, "quarter": q, "row": self.find(row[key], key) if key else None}
+        key = next((f for f in self.UNIQUE if row.get(f) not in (None, "")), None)
+        new_row = self.find(row[key], key, supplier_vat) if key else None
+        return {"written": True, "tab": self.ws.title, "quarter": q, "row": new_row}
 
 
 class IncomeSheet(Table):

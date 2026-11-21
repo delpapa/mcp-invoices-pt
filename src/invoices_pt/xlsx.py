@@ -123,12 +123,7 @@ class XlsxTable:
         return set(XlsxBook.filed(self.book.load()))
 
     def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "") -> int | None:
-        norm = lambda s: re.sub(r"\s+", "", str(s or "")).upper()
-        for rec in self.records():
-            if norm(value) and norm(rec.get(field)) == norm(value) and (
-                    not supplier_vat or norm(rec.get("supplier_vat")) in ("", norm(supplier_vat))):
-                return rec["row"]
-        return None
+        return columns.find_row(self.records(), value, field, supplier_vat)
 
     # ---- writing
     def _cell_value(self, field: str, v):
@@ -151,9 +146,8 @@ class XlsxTable:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         recs = self._records(wb)
         for field in columns.UNIQUE[self.KIND]:
-            norm = lambda s: re.sub(r"\s+", "", str(s or "")).upper()
-            if row.get(field) and any(norm(r.get(field)) == norm(row[field]) for r in recs):
-                dup = next(r["row"] for r in recs if norm(r.get(field)) == norm(row[field]))
+            dup = columns.find_row(recs, row.get(field), field, row.get("supplier_vat", ""))
+            if dup is not None:
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
         if dry_run:
