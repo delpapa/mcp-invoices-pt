@@ -33,6 +33,9 @@ def _region(col: str) -> str:
 
 EXPENSE_FX = 'IF(L{r}="",1,IF(L{r}>0,L{r},NA()))'
 BUSINESS_SHARE = 'IF(Q{r}="",1,Q{r})'
+# Both converted amounts are already euro cents. Restore the exact cent difference
+# before applying the share so binary subtraction cannot bias a half-cent tie.
+DOMESTIC_VAT = 'ROUND(M{r}-N{r},2)'
 REVERSE_CHARGE_COLUMNS = []
 for code, (base_box, vat_box) in REVERSE_CHARGE_BOXES.items():
     REVERSE_CHARGE_COLUMNS.extend([
@@ -50,8 +53,8 @@ EXPENSE_COLUMNS = [
     ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/' + EXPENSE_FX + ',2))', "num"),
     ("NIF?", None, ""), ("VAT code", None, ""), ("Business %", None, "pct"),
     *REVERSE_CHARGE_COLUMNS,
-    ("Box 20", '=IF(TRIM(P{r})="PT-ASSET",ROUND((M{r}-N{r})*' + BUSINESS_SHARE + ',2),0)', "num"),
-    ("Box 24", '=IF(TRIM(P{r})="PT",ROUND((M{r}-N{r})*' + BUSINESS_SHARE + ',2),0)+ROUND((S{r}+U{r}+W{r})*' + BUSINESS_SHARE + ',2)', "num"),
+    ("Box 20", '=IF(TRIM(P{r})="PT-ASSET",ROUND(' + DOMESTIC_VAT + '*' + BUSINESS_SHARE + ',2),0)', "num"),
+    ("Box 24", '=IF(TRIM(P{r})="PT",ROUND(' + DOMESTIC_VAT + '*' + BUSINESS_SHARE + ',2),0)+ROUND((S{r}+U{r}+W{r})*' + BUSINESS_SHARE + ',2)', "num"),
     ("Box 98", "=R{r}", "num"),
     ("Net VAT benefit €", "=X{r}+Y{r}-S{r}-U{r}-W{r}", "num"),
     ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*' + BUSINESS_SHARE + '-AA{r},2))', "num"),
