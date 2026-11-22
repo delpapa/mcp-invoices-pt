@@ -9,6 +9,7 @@ Filed quarters are recorded in a hidden `_meta` sheet; their declaration values 
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import os
 import re
 import tempfile
@@ -61,8 +62,12 @@ class XlsxBook:
         wb.calculation.fullCalcOnLoad = True           # Excel / LibreOffice recalculate on open
         fd, tmp = tempfile.mkstemp(suffix=".xlsx", dir=os.path.dirname(self.path) or ".")
         os.close(fd)
-        wb.save(tmp)
-        os.replace(tmp, self.path)                     # atomic: a crash never leaves half a workbook
+        try:
+            wb.save(tmp)
+            os.replace(tmp, self.path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     @staticmethod
     def filed(wb: openpyxl.Workbook) -> dict[str, str]:
@@ -293,6 +298,28 @@ class XlsxExpenses(XlsxTable):
         return {"frozen": True, **plan}
 
 
+def _publish_new(staged: str, path: str) -> None:
+    """Publish a finished workbook without taking another creator's filename."""
+    if os.name == "nt":
+        os.rename(staged, path)  # Windows rename refuses an existing destination.
+        return
+    try:
+        os.link(staged, path)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.ENOSYS):
+            raise
+    # Some mounted drives cannot create hard links. Reserve the name exclusively
+    # before replacing it with the finished file, and release it if publication fails.
+    with open(path, "xb"):
+        pass
+    try:
+        os.replace(staged, path)
+    except BaseException:
+        os.unlink(path)
+        raise
+
+
 def create_workbook(path: str, year: int, expenses_name: str, income_name: str, opening_credit: float = 0.0) -> dict:
     """A new workbook for a tax year, in the same layout as the Google Sheet. Refuses to overwrite."""
     if os.path.exists(path):
@@ -356,6 +383,9 @@ def create_workbook(path: str, year: int, expenses_name: str, income_name: str, 
     exp.conditional_formatting.add(f"{doc}{first}:{doc}{end}", FormulaRule(
         formula=[f'ISNUMBER(SEARCH("MISSING",{doc}{first}))'], font=Font(bold=True, color="CC1A1A")))
     wb.calculation.fullCalcOnLoad = True
-    wb.save(path)
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(path) or ".") as staging:
+        staged = os.path.join(staging, "book.xlsx")
+        wb.save(staged)
+        _publish_new(staged, path)
     return {"workbook": path, "expenses_sheet": expenses_name, "income_sheet": income_name,
             "opening_credit": opening_credit}

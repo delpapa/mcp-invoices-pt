@@ -1,9 +1,11 @@
 """The local workbook backend, end to end and offline. If LibreOffice is installed, the workbook is also
 recalculated by it, to check that the sheet formulas give the same numbers the tools compute in Python."""
 
+import errno
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -138,3 +140,66 @@ def test_partial_layout_upgrade_cannot_omit_reduced_sale_from_return(tmp_path, l
     result = inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C1"), dry_run=False)
     assert "upgrade" in result["error"]
     assert inc.records() == []
+
+
+def test_failed_workbook_save_leaves_creation_and_update_retryable(cfg, monkeypatch):
+    path = Path(cfg.workbook(2026))
+
+    def fail_mid_save(workbook, filename):
+        Path(filename).write_bytes(b"unfinished workbook")
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(openpyxl.Workbook, "save", fail_mid_save)
+        with pytest.raises(OSError, match="disk full"):
+            create_year(cfg, 2026, 0)
+    assert not path.exists()
+    create_year(cfg, 2026, 0)
+    previous_contents = path.read_bytes()
+    previous_files = set(path.parent.iterdir())
+    expenses, _ = open_books(cfg, 2026)
+    with monkeypatch.context() as patch:
+        patch.setattr(openpyxl.Workbook, "save", fail_mid_save)
+        with pytest.raises(OSError, match="disk full"):
+            expenses.add({"date": "2026-01-05", "invoice_no": "42"}, dry_run=False)
+    assert path.read_bytes() == previous_contents
+    assert set(path.parent.iterdir()) == previous_files
+
+
+@pytest.mark.parametrize("hard_links", [True, False])
+def test_racing_creators_preserve_existing_workbook(cfg, monkeypatch, hard_links):
+    if not hard_links:
+        monkeypatch.setattr(os, "link", _unsupported_link)
+
+    path = Path(cfg.workbook(2026))
+    save = openpyxl.Workbook.save
+
+    def competitor_finishes_before_save(workbook, filename):
+        path.write_bytes(b"winning workbook")
+        save(workbook, filename)
+
+    monkeypatch.setattr(openpyxl.Workbook, "save", competitor_finishes_before_save)
+    with pytest.raises(FileExistsError):
+        create_year(cfg, 2026, 0)
+    assert path.read_bytes() == b"winning workbook"
+
+
+def _unsupported_link(*args):
+    raise OSError(errno.ENOTSUP, "hard links unsupported")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows supports exclusive rename")
+def test_creation_without_hard_links_can_retry_failed_publication(cfg, monkeypatch):
+    path = Path(cfg.workbook(2026))
+    monkeypatch.setattr(os, "link", _unsupported_link)
+
+    def failed_replace(*args):
+        raise OSError("drive error")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", failed_replace)
+        with pytest.raises(OSError, match="drive error"):
+            create_year(cfg, 2026, 0)
+    assert not path.exists()
+    create_year(cfg, 2026, 0)
+    assert openpyxl.load_workbook(path).sheetnames[:2] == ["Expenses", "Income"]
