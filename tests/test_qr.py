@@ -51,3 +51,15 @@ def test_multipage_scanner_file_is_found_booked_and_indexed(cfg, qr_png, tmp_pat
     assert report.missing([], str(archived.parent))["unbooked_files"] == [archived.name]
     index = Ledger(str(tmp_path / "separate.sqlite"))
     assert index_folder(str(archived.parent), index)["indexed"] == 1
+
+
+def test_unrelated_codes_do_not_mask_a_valid_invoice_and_missing_totals_stay_unknown(qr_png):
+    from conftest import AT_PAYLOAD
+
+    assert qr.parse_payload("A:aisle*H:shelf") is None
+    assert qr.parse_payload(AT_PAYLOAD.replace("20260115", "20260231")) is None
+    partial = AT_PAYLOAD.replace("*O:123.00", "")
+    doc = qr.to_document(qr.read_qr(qr_png(partial)))
+    assert doc.amount is None and doc.vat_included == 23
+    zero = qr.to_document(qr.parse_payload(AT_PAYLOAD.replace("O:123.00", "O:0.00")))
+    assert zero.amount == 0

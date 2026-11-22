@@ -31,7 +31,11 @@ KEEP = ("status", "fiscal_space", "buyer_country", "not_subject", "withholding",
 def parse_payload(text: str) -> dict | None:
     """Split an AT payload ("A:123*B:456*...") into named fields; None if it is not one."""
     kv = dict(part.split(":", 1) for part in text.split("*") if ":" in part)
-    if "A" not in kv or "H" not in kv:
+    if not all(kv.get(k) for k in ("A", "D", "F", "G", "H")):
+        return None
+    try:
+        dt.datetime.strptime(kv["F"], "%Y%m%d")
+    except ValueError:
         return None
     return {FIELDS.get(k, k): v for k, v in kv.items()}
 
@@ -73,7 +77,7 @@ def to_document(fields: dict, file: str = "") -> Document:
         country="PT",
         invoice_no=fields.get("doc_id", ""),
         atcud=fields.get("atcud", ""),
-        amount=signed_amount(num("total"), kind),
+        amount=signed_amount(num("total"), kind) if fields.get("total") else None,
         vat_included=signed_amount(num("total_vat"), kind),
         buyer_nif=fields.get("buyer_nif", ""),
         markers=["exempt"] if num("total_vat") == 0 and num("base_exempt") > 0 else [],
