@@ -13,8 +13,10 @@ import errno
 import os
 import re
 import tempfile
+from copy import copy
 
 import openpyxl
+from openpyxl.formula.translate import Translator
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -176,43 +178,53 @@ class XlsxTable:
         if dry_run:
             return {"dry_run": True, "workbook": self.book.path, "sheet": self.book.names[self.KIND], "quarter": q,
                     "cells": cells}
-        formula_headers = set(layout.row_formulas(self.KIND, 0))
-        width = max(idx.values())
-        # every existing row as {column: value}, keeping columns the user added by hand
-        rows = []
-        for r in range(head + 1, ws.max_row + 1):
-            vals = {c: ws.cell(r, c).value for c in range(1, width + 1)}
-            inputs = [vals[idx[h.strip()]] for h in mapped.values()]
-            if any(v not in (None, "") for v in inputs):
-                rows.append(vals)
-        new = {c: None for c in range(1, width + 1)}
-        for field, header in mapped.items():
-            new[idx[header.strip()]] = self._cell_value(field, row.get(field))
-        new["_new"] = True
-        rows.append(new)
         date_col = idx[self.columns[self.date_field].strip()]
-        rows.sort(key=lambda v: (bookmath.day(v[date_col]) is None, bookmath.day(v[date_col]) or dt.date.max))
-        for r in range(head + 1, max(ws.max_row, head + len(rows)) + 1):     # clear, then rewrite sorted
-            for c in range(1, width + 1):
-                ws.cell(r, c).value = None
-        header_by_col = {c: h for h, c in idx.items()}
+        rows = []
+        for existing in ws.iter_rows(min_row=head + 1):
+            if any(c.value is not None or c.comment or c.hyperlink for c in existing):
+                rows.append((bookmath.day(existing[date_col - 1].value) or dt.date.max, existing))
+        rows.append((day, None))
+        rows.sort(key=lambda item: item[0])
+
+        # Hold the original cell objects until all moved rows have vacated their destinations.
+        for dest, (_, existing) in enumerate(rows, head + 1):
+            if existing and existing[0].row != dest:
+                for cell in existing:
+                    del ws[cell.coordinate]
         spec = {h: fmt for h, _, fmt in _spec(self.KIND)}
-        new_row = None
-        for k, vals in enumerate(rows):
-            r = head + 1 + k
-            formulas = layout.row_formulas(self.KIND, r)
-            for c in range(1, width + 1):
-                h = header_by_col.get(c, "")
-                cell = ws.cell(r, c)
-                cell.value = formulas[h] if h in formula_headers else vals.get(c)
-                if spec.get(h):
-                    cell.number_format = NUMBER_FORMATS[spec[h]]
-                if h.startswith("Box ") or h == "Net VAT benefit €":
-                    cell.fill = FILL["box"]
-                elif h.startswith("IRS deductible"):
-                    cell.fill = FILL["irs"]
-            if vals.get("_new"):
-                new_row = r
+        for dest, (_, existing) in enumerate(rows, head + 1):
+            if existing is None:
+                new_row = dest
+                for field, header in mapped.items():
+                    cell = ws.cell(dest, idx[header.strip()])
+                    cell.value = self._cell_value(field, row.get(field))
+                    if isinstance(cell.value, str):
+                        cell.data_type = "s"
+                for h, col in idx.items():
+                    cell = ws.cell(dest, col)
+                    if spec.get(h):
+                        cell.number_format = NUMBER_FORMATS[spec[h]]
+                    if h.startswith("Box ") or h == "Net VAT benefit €":
+                        cell.fill = FILL["box"]
+                    elif h.startswith("IRS deductible"):
+                        cell.fill = FILL["irs"]
+            else:
+                if existing[0].row != dest:
+                    for source in existing:
+                        cell = ws.cell(dest, source.column)
+                        cell._style = copy(source._style)
+                        if source.data_type == "f" and isinstance(source.value, str):
+                            cell.value = Translator(source.value, origin=source.coordinate).translate_formula(cell.coordinate)
+                        else:
+                            cell.value, cell.data_type = source.value, source.data_type
+                        cell.comment = copy(source.comment)
+                        if source.hyperlink:
+                            cell.hyperlink = copy(source.hyperlink)
+                if not any(existing[idx[h.strip()] - 1].value not in (None, "") for h in mapped.values()):
+                    continue  # user notes outside the booking columns
+            for h, formula in layout.row_formulas(self.KIND, dest).items():
+                if h in idx:
+                    ws.cell(dest, idx[h]).value = formula
         self.book.save(wb)
         return {"written": True, "workbook": self.book.path, "sheet": ws.title, "quarter": q, "row": new_row}
 

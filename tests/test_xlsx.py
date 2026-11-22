@@ -204,3 +204,44 @@ def test_creation_without_hard_links_can_retry_failed_publication(cfg, monkeypat
     assert not path.exists()
     create_year(cfg, 2026, 0)
     assert openpyxl.load_workbook(path).sheetnames[:2] == ["Expenses", "Income"]
+
+
+def test_backdated_entry_preserves_annotations_and_custom_cells(cfg):
+    from openpyxl.comments import Comment
+    from openpyxl.styles import PatternFill
+
+    create_year(cfg, 2026, 0)
+    exp, _ = open_books(cfg, 2026)
+    first = exp.add({"date": "2026-02-01", "invoice_no": "B", "amount": 12}, dry_run=False)["row"]
+    wb = exp.book.load()
+    ws = wb["Expenses"]
+    ws[f"H{first}"].comment = Comment("Checked against paper", "Reviewer")
+    ws[f"H{first}"].hyperlink = "https://example.org/invoice/B"
+    ws[f"J{first}"].fill = PatternFill("solid", fgColor="FFFFCC00")
+    ws[f"AG{first - 1}"] = "My total"
+    ws[f"AG{first}"] = f"=J{first}+$J$1"
+    ws[f"AH{first}"] = "Unlabelled attachment note"
+    ws[f"AG{first+1}"] = "To classify"
+    exp.book.save(wb)
+
+    assert exp.add({"date": "2026-01-01", "invoice_no": "A"}, dry_run=False)["row"] == first
+    ws = exp.book.load()["Expenses"]
+    assert ws[f"H{first}"].comment is None and ws[f"H{first}"].hyperlink is None
+    assert ws[f"H{first+1}"].comment.text == "Checked against paper"
+    assert ws[f"H{first+1}"].hyperlink.target == "https://example.org/invoice/B"
+    assert ws[f"H{first+1}"].hyperlink.ref == f"H{first+1}"
+    assert ws[f"J{first+1}"].fill.fgColor.rgb == "FFFFCC00"
+    assert ws[f"AG{first+1}"].value == f"=J{first+1}+$J$1"
+    assert ws[f"AH{first+1}"].value == "Unlabelled attachment note"
+    assert ws[f"AG{first+2}"].value == "To classify"
+
+
+def test_literal_identifiers_survive_a_sort(cfg):
+    create_year(cfg, 2026, 0)
+    exp, _ = open_books(cfg, 2026)
+    exp.add({"date": "2026-02-01", "invoice_no": "=FT123", "supplier": "#N/A"}, dry_run=False)
+    exp.add({"date": "2026-01-01", "invoice_no": "Earlier"}, dry_run=False)
+    ws = exp.book.load(data_only=True)["Expenses"]
+    first = layout.EXP_FIRST_ROW + 1
+    assert (ws[f"H{first}"].value, ws[f"H{first}"].data_type) == ("=FT123", "s")
+    assert (ws[f"D{first}"].value, ws[f"D{first}"].data_type) == ("#N/A", "s")
