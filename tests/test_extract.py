@@ -45,3 +45,20 @@ def test_ledger(tmp_path):
     led.record(sha256(str(f)), str(f), "PT1|FT1", "qr", "extracted")
     assert led.get(sha256(str(f)))["status"] == "extracted"
     assert len(led.by_key("PT1|FT1")) == 1
+
+
+def test_cancelled_qr_document_is_kept_for_review(qr_png, cfg, tmp_path, monkeypatch):
+    from conftest import AT_PAYLOAD
+    from invoices_pt import inbox, server
+    from invoices_pt.income import propose as propose_income
+
+    path = qr_png(AT_PAYLOAD.replace("*E:N*", "*E:A*"), folder=tmp_path / "inbox")
+    doc = read_document(path)
+    assert doc.extra.get("status") == "A"
+    monkeypatch.setattr(server, "_cfg", lambda: cfg)
+    extracted = server.extract(path)
+    assert "row" not in extracted and "cancelled" in extracted["proposal"]["checks"][0].lower()
+    plan = inbox.plan(cfg, Ledger(cfg.paths(2026)["ledger"]))
+    assert not plan["expenses"] and not plan["sales"]
+    assert [r["path"] for r in plan["needs_reading"]] == [path]
+    assert "cancelled" in propose_income(cfg, None, doc)["error"].lower()

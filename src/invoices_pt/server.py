@@ -88,7 +88,7 @@ def extract(path: str, read_anyway: bool = False) -> dict:
         if looks is False and not read_anyway:
             out["document"].pop("text", None)
             out["warning"] = "this does not read like an invoice or receipt; its text was withheld (read_anyway=true)"
-    else:
+    elif not doc.cancelled:
         out["row"] = expense_row(doc, out["proposal"])
     return out
 

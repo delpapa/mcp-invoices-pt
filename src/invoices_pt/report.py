@@ -143,14 +143,17 @@ def _unique_positions(keys, field, used):
     return positions
 
 
-def _efatura_pairs(docs, records):
+def _efatura_pairs(docs, records, identity_only=False):
     """Reserve unambiguous number matches before matching the remaining payments."""
     doc_keys = [_reconciliation_keys(d.supplier_vat, d.invoice_no, d.doc_type, d.date, _amount(d.amount)) for d in docs]
     row_keys = [_reconciliation_keys(r["supplier_vat"], r["invoice_no"], r.get("doc_type"),
                                      _date(r["date"]), _amount(r["amount"]))
                 for r in records]
     pairs, used_rows = {}, set()
-    for field in ("document", "supplier_number", "number", "supplier_payment", "payment"):
+    fields = ("document", "supplier_number", "number")
+    if not identity_only:
+        fields += ("supplier_payment", "payment")
+    for field in fields:
         invoices = _unique_positions(doc_keys, field, pairs)
         rows = _unique_positions(row_keys, field, used_rows)
         for key, i in invoices.items():
@@ -170,6 +173,8 @@ def _efatura_pairs(docs, records):
 
 def reconcile_efatura(docs: list[Document], records: list[dict]) -> dict:
     """Match e-Fatura documents one-to-one with supplier-compatible rows by number, then date and amount."""
+    cancelled = [d for d in docs if d.cancelled]
+    docs = [d for d in docs if not d.cancelled]
     pairs = _efatura_pairs(docs, records)
     matched, out = set(), {"not_in_sheet": [], "differences": [], "pt_rows_not_in_efatura": []}
     for i, d in enumerate(docs):
@@ -191,6 +196,13 @@ def reconcile_efatura(docs: list[Document], records: list[dict]) -> dict:
             diffs.append("sheet is missing fields e-Fatura has")
         if diffs:
             out["differences"].append({"row": r["row"], "efatura": d.to_dict(), "issues": diffs})
+    # Only a document identity ties a cancellation to a booked invoice. A payment
+    # on the same day for the same amount could be an unrelated active invoice.
+    remaining = [r for r in records if r["row"] not in matched]
+    for i, r in _efatura_pairs(cancelled, remaining, identity_only=True).items():
+        matched.add(r["row"])
+        out["differences"].append({"row": r["row"], "efatura": cancelled[i].to_dict(),
+                                   "issues": ["e-Fatura marks the booked document as cancelled"]})
     for r in records:
         if r["row"] not in matched and _n(r["supplier_vat"]).startswith("PT") and r["document"] != "No invoice":
             out["pt_rows_not_in_efatura"].append(f"row {r['row']} {r['date']} {r['supplier']} {r['amount']}")

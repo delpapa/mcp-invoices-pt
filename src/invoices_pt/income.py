@@ -58,6 +58,8 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
     """The income row for one sale, file names for both documents, and checks that the two belong together."""
     if not invoice and not at_doc:
         return {"error": "give the invoice, the AT document, or both"}
+    if any(d.cancelled for d in (invoice, at_doc) if d):
+        return {"error": "Cancelled document: review the sale before booking"}
     checks = []
     if at_doc and cfg.nif and at_doc.supplier_vat != "PT" + cfg.nif:
         checks.append(f"the AT document was issued by {at_doc.supplier_vat}, not by your NIF")

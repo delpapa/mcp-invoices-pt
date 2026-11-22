@@ -149,3 +149,16 @@ def test_reports_require_real_files_and_keep_zero_amounts(tmp_path):
     income = dict(row=1, invoice_date="2026-01-01", client="X", invoice_no="1", recibo_no="2",
                   invoice_file="fake.pdf", recibo_file="")
     assert missing_income([income], str(tmp_path))["file_not_found"] == ["row 1 2026-01-01 X 1: fake.pdf"]
+
+
+def test_cancelled_exports_do_not_create_missing_invoices_or_hide_active_ones():
+    date = dt.date(2026, 2, 10)
+    def entry(number, status):
+        return Document("efatura", date=date, invoice_no=number, supplier_vat="PT1", amount=11, vat_included=1,
+                        extra={"status": status})
+    active, cancelled = entry("1", "Registado"), entry("1", "Anulado")
+    row = rec(31, date.isoformat(), "Shop", 11, "1", vat=1, supplier_vat="PT1")
+    assert reconcile_efatura([cancelled], [])["not_in_sheet"] == []
+    assert reconcile_efatura([cancelled, active], [row])["differences"] == []
+    diff = reconcile_efatura([cancelled], [row])["differences"]
+    assert [item["row"] for item in diff] == [31] and "cancelled" in diff[0]["issues"][0].lower()

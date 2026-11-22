@@ -134,6 +134,9 @@ def plan(cfg: Config, ledger: Ledger) -> dict:
         except Exception as e:
             out["errors"].append({"path": path, "error": str(e)})
             continue
+        if doc.cancelled:
+            out["needs_reading"].append({"path": path, "reason": "Cancelled document: review before booking"})
+            continue
         if doc.layer == "text":
             out["needs_reading"].append({"path": path, "card_last4": doc.card_last4, "markers": doc.markers})
             continue
