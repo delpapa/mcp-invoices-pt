@@ -7,7 +7,7 @@ import os
 
 from mcp.server.mcpserver import MCPServer
 
-from . import __version__, report, vat
+from . import __version__, bookmath, report, vat
 from .config import Config
 from .declaration import find_return_pdf, parse_return_pdf
 from . import inbox
@@ -207,6 +207,8 @@ def mark_filed(quarter: str, year: int, return_pdf: str = "", dry_run: bool = Tr
     overrides = {}
     if pdf:
         submitted = parse_return_pdf(pdf)
+        if not any(b in submitted and b in shown for b in bookmath.RESULT_BOXES):
+            return {"error": "No VAT return result boxes could be read from the PDF", "return_pdf": pdf}
         diffs = [{"box": b, "sheet": shown[b], "submitted": v} for b, v in sorted(submitted.items())
                  if b in shown and (shown[b] is None or abs(shown[b] - v) > 0.005)]
         if apply_pdf_values:

@@ -92,3 +92,16 @@ def test_mark_filed_leaves_quarter_open_when_submitted_values_are_unavailable(cf
         result = server.mark_filed("Q1", 2026, pdf, apply_pdf_values=True, dry_run=False)
         assert "error" in result
         assert open_books(cfg, 2026)[0].filed_quarters() == set()
+
+
+def test_comparing_an_unrecognized_pdf_keeps_the_quarter_open(cfg, monkeypatch):
+    from invoices_pt import server
+    from invoices_pt.books import create_year, open_books
+
+    create_year(cfg, 2026, 0)
+    monkeypatch.setattr(server, "_cfg", lambda: cfg)
+    # A quantity and price on an unrelated document can look like box 1.
+    monkeypatch.setattr(server, "parse_return_pdf", lambda path: {1: 20})
+    assert "error" in server.mark_filed("Q1", 2026, "invoice.pdf", dry_run=False)
+    assert not open_books(cfg, 2026)[0].filed_quarters()
+    assert server.mark_filed("Q1", 2026, dry_run=False)["freeze"]["frozen"]
