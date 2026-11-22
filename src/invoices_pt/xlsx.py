@@ -16,6 +16,7 @@ import tempfile
 from copy import copy
 
 import openpyxl
+from filelock import FileLock
 from openpyxl.formula.translate import Translator
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -40,6 +41,10 @@ class WorkbookOpen(RuntimeError):
     pass
 
 
+def _version(stat: os.stat_result) -> tuple[int, ...]:
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 class XlsxBook:
     def __init__(self, cfg: Config, year: int):
         self.cfg, self.year = cfg, year
@@ -51,7 +56,11 @@ class XlsxBook:
     def load(self, data_only: bool = False) -> openpyxl.Workbook:
         if not os.path.exists(self.path):
             raise FileNotFoundError(f"{self.path} does not exist; run create_year_sheet({self.year}) first")
-        return openpyxl.load_workbook(self.path, data_only=data_only)
+        with open(self.path, "rb") as source:
+            version = _version(os.fstat(source.fileno()))
+            wb = openpyxl.load_workbook(source, data_only=data_only)
+        wb._invoices_version = version
+        return wb
 
     def check_closed(self) -> None:
         folder, name = os.path.split(self.path)
@@ -66,7 +75,15 @@ class XlsxBook:
         os.close(fd)
         try:
             wb.save(tmp)
-            os.replace(tmp, self.path)
+            # Serialize the version check and replacement across processes. A stale
+            # snapshot must never erase a sale, expense or filing another writer saved.
+            folder, name = os.path.split(self.path)
+            with FileLock(os.path.join(folder, f".{name}.lock"), timeout=10):
+                self.check_closed()
+                if not os.path.exists(self.path) or _version(os.stat(self.path)) != wb._invoices_version:
+                    raise WorkbookOpen(f"{name} changed during this operation; retry with the latest workbook")
+                os.replace(tmp, self.path)
+                wb._invoices_version = _version(os.stat(self.path))
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)

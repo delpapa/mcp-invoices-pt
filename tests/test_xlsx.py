@@ -245,3 +245,24 @@ def test_literal_identifiers_survive_a_sort(cfg):
     first = layout.EXP_FIRST_ROW + 1
     assert (ws[f"H{first}"].value, ws[f"H{first}"].data_type) == ("=FT123", "s")
     assert (ws[f"D{first}"].value, ws[f"D{first}"].data_type) == ("#N/A", "s")
+
+
+def test_overlapping_sale_and_expense_cannot_overwrite_each_other(cfg, monkeypatch):
+    create_year(cfg, 2026, 0)
+    expenses, _ = open_books(cfg, 2026)
+    _, separate_income_client = open_books(cfg, 2026)
+    expense = {"date": "2026-01-10", "invoice_no": "P1"}
+    original_save = expenses.book.save
+
+    def commit_sale_first(wb):
+        assert separate_income_client.add({"invoice_date": "2026-01-12", "invoice_no": "S1"}, dry_run=False)["written"]
+        original_save(wb)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(expenses.book, "save", commit_sale_first)
+        with pytest.raises(WorkbookOpen, match="changed"):
+            expenses.add(expense, dry_run=False)
+    assert expenses.records() == []
+    assert expenses.add(expense, dry_run=False)["written"]
+    assert [r["invoice_no"] for r in separate_income_client.records()] == ["S1"]
+    assert [r["invoice_no"] for r in expenses.records()] == ["P1"]
