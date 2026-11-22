@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import fx, vat
+from . import bookmath, fx, vat
 from .config import Config
 from .documents import parsers, qr, text
 from .model import Document
@@ -45,7 +45,8 @@ def file_name(doc: Document, rule: dict, ext: str = ".pdf") -> str:
 
 def expense_row(doc: Document, prop: dict, expense: str = "") -> dict:
     """The expense row add_expense takes, filled from a document and its proposal (any field can be changed)."""
-    fx_rate = prop["fx_rate"] if isinstance(prop["fx_rate"], float) else (1 if doc.currency == "EUR" else "")
+    rate = bookmath.num(prop["fx_rate"])
+    fx_rate = rate if rate is not None else (1 if doc.currency == "EUR" else "")
     return {
         "date": doc.date.isoformat() if doc.date else "", "expense": expense or _slug(doc, {"slug": prop.get("slug")}),
         "supplier": prop["supplier"], "country": doc.country, "supplier_vat": doc.supplier_vat,

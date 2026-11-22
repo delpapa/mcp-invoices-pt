@@ -70,12 +70,12 @@ def quarter(v) -> str:
     return f"Q{(d.month - 1) // 3 + 1}" if d else ""
 
 
-EXPENSE_FX_ERROR = "fx must be a positive finite exchange rate; leave blank for 1"
+EXPENSE_FX_ERROR = "fx must be a positive finite exchange rate; only EUR expenses can use a blank rate"
 
 
-def expense_fx(value) -> float | None:
+def expense_fx(value, currency: str = "") -> float | None:
     if value in (None, ""):
-        return 1.0
+        return 1.0 if (currency or "").strip().upper() in ("", "EUR") else None
     rate = num(value)
     return rate if rate is not None and math.isfinite(rate) and rate > 0 else None
 
@@ -90,7 +90,7 @@ def expense_row(rec: dict) -> dict:
     # Preserve decimal half-cents through subtraction and multiplication before ROUND.
     amount = Decimal(str(amount))
     vat_incl = Decimal(str(num(rec.get("vat_included")) or 0))
-    rate = expense_fx(rec.get("fx"))
+    rate = expense_fx(rec.get("fx"), rec.get("currency"))
     if rate is None:
         raise ValueError(f"Expense row {rec.get('row', '?')}: {EXPENSE_FX_ERROR}")
     fx = Decimal(str(rate))

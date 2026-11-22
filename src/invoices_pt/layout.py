@@ -31,7 +31,7 @@ def _region(col: str) -> str:
     return f'=IF({col}{{r}}="","",IF({col}{{r}}="PT","PT",IF(ISNUMBER(MATCH({col}{{r}},{eu},0)),"EU","OutEU")))'
 
 
-EXPENSE_FX = 'IF(L{r}="",1,IF(L{r}>0,L{r},NA()))'
+EXPENSE_FX = 'IF(L{r}="",IF(OR(I{r}="",TRIM(I{r})="EUR"),1,NA()),IF(L{r}>0,L{r},NA()))'
 BUSINESS_SHARE = 'IF(Q{r}="",1,Q{r})'
 # Both converted amounts are already euro cents. Restore the exact cent difference
 # before applying the share so binary subtraction cannot bias a half-cent tie.

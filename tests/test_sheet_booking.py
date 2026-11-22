@@ -120,3 +120,9 @@ def test_freeze_commits_submitted_values_and_protections_in_one_request(expenses
     assert updates[0]["rows"][0]["values"][0]["userEnteredValue"] == {"numberValue": 20}
     assert updates[0]["start"] == {"sheetId": 17, "rowIndex": 0, "columnIndex": 1}
     assert any("addProtectedRange" in r for r in requests)
+
+
+def test_missing_foreign_exchange_rate_does_not_write_to_sheets(expenses):
+    result = expenses.add({"date": "2026-01-05", "currency": "JPY", "amount": 15000}, dry_run=False)
+    assert "fx" in result["error"]
+    expenses.sh.batch_update.assert_not_called()

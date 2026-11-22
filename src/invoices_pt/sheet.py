@@ -110,7 +110,7 @@ class Table:
         return columns.find_row(self.records(), value, field, supplier_vat, doc_type)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
-        if self.KIND == "expenses" and bookmath.expense_fx(row.get("fx")) is None:
+        if self.KIND == "expenses" and bookmath.expense_fx(row.get("fx"), row.get("currency")) is None:
             return {"error": bookmath.EXPENSE_FX_ERROR}
         day = dt.date.fromisoformat(str(row[self.date_field]))
         q = quarter(day)

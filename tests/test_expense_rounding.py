@@ -56,3 +56,19 @@ def test_invalid_expense_fx(cfg, rate):
     # Validation precedes workbook access in dry runs and writes.
     expenses = XlsxBook(cfg, 2026).expenses
     assert expenses.add(row, dry_run=False) == {"error": bookmath.EXPENSE_FX_ERROR}
+
+
+def test_missing_foreign_exchange_rate_cannot_be_booked_at_par(cfg):
+    from invoices_pt.extract import expense_row
+    from invoices_pt.model import Document
+
+    doc = Document(layer="parser:test", currency="JPY", amount=15000)
+    prop = dict(fx_rate="unavailable", supplier="", nif_on_invoice="No", vat_code="NONE", business_pct=1,
+                document="PDF invoice", file_name="", account="")
+    row = dict(expense_row(doc, prop), date="2026-01-05")
+    with pytest.raises(ValueError, match="fx"):
+        bookmath.expense_row(row)
+    assert "fx" in XlsxBook(cfg, 2026).expenses.add(row, dry_run=False)["error"]
+    for rate in (150, "150.0"):
+        proposed = expense_row(doc, dict(prop, fx_rate=rate))
+        assert bookmath.expense_row(proposed)["amount_eur"] == 100
