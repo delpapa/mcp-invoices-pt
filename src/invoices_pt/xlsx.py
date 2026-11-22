@@ -9,11 +9,16 @@ Filed quarters are recorded in a hidden `_meta` sheet; their declaration values 
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import os
 import re
+import stat
 import tempfile
+from copy import copy
 
 import openpyxl
+from filelock import FileLock
+from openpyxl.formula.translate import Translator
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -21,7 +26,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from . import bookmath, columns, layout
 from .config import Config
 
-END_ROW = 5000          # formulas and validation cover the table down to this row
+END_ROW = 1_048_576   # Excel's last row
+LEGACY_END_ROW = 5000
 META = "_meta"
 NUMBER_FORMATS = {"date": "dd.mm.yyyy", "num": "#,##0.00", "fx": "0.0000", "pct": "0%"}
 FILL = {"box": PatternFill("solid", fgColor="FFFBEB"), "irs": PatternFill("solid", fgColor="EDF7ED"),
@@ -37,6 +43,10 @@ class WorkbookOpen(RuntimeError):
     pass
 
 
+def _version(stat: os.stat_result) -> tuple[int, ...]:
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 class XlsxBook:
     def __init__(self, cfg: Config, year: int):
         self.cfg, self.year = cfg, year
@@ -48,7 +58,11 @@ class XlsxBook:
     def load(self, data_only: bool = False) -> openpyxl.Workbook:
         if not os.path.exists(self.path):
             raise FileNotFoundError(f"{self.path} does not exist; run create_year_sheet({self.year}) first")
-        return openpyxl.load_workbook(self.path, data_only=data_only)
+        with open(self.path, "rb") as source:
+            version = _version(os.fstat(source.fileno()))
+            wb = openpyxl.load_workbook(source, data_only=data_only)
+        wb._invoices_version = version
+        return wb
 
     def check_closed(self) -> None:
         folder, name = os.path.split(self.path)
@@ -56,13 +70,62 @@ class XlsxBook:
             if os.path.exists(os.path.join(folder, lock)):
                 raise WorkbookOpen(f"{name} is open in a spreadsheet program; close it and try again")
 
+    def _extend_summary_ranges(self, wb: openpyxl.Workbook) -> None:
+        """Upgrade only recognized 5,000-row summary formulas in previously generated books."""
+        for table in (self.expenses, self.income):
+            if self.names[table.KIND] not in wb.sheetnames:
+                continue
+            ws = table._sheet(wb)
+            old = []
+            for cells in ws.iter_rows(max_row=min(ws.max_row, 200)):
+                if cells[0].value == table.columns[table.date_field]:
+                    break
+                old.extend(c for c in cells if c.data_type == "f" and isinstance(c.value, str)
+                           and "$5000" in c.value)
+            if not old:
+                continue
+            expense, income = self.names["expenses"], self.names["income"]
+            template = (layout.expense_values(self.year, income, 0, end=LEGACY_END_ROW) if table is self.expenses
+                        else layout.income_values(self.year, expense, end=LEGACY_END_ROW))
+            known = {v for row in template for v in row if isinstance(v, str) and "$5000" in v}
+            # The original expenses header was on row 30. Its IRS/SS summary used
+            # quarter columns rather than date predicates.
+            known.update(v.replace("$34:", "$30:") for v in tuple(known))
+            if table is self.income:
+                for q in bookmath.QUARTERS:
+                    for col in ("B", "J"):
+                        known.add(f'=SUMIFS($N$7:$N$5000,${col}$7:${col}$5000,"{q}")')
+                    for head in (30, layout.EXP_HEADER_ROW):
+                        tab = expense.replace("'", "''")
+                        known.add(f'''=SUMIFS('{tab}'!$AB${head}:$AB$5000,'{tab}'!$B${head}:$B$5000,"{q}")''')
+            for cell in old:
+                if cell.value in known:
+                    cell.value = re.sub(r"(:\$[A-Z]+\$)5000\b", rf"\g<1>{END_ROW}", cell.value)
+
     def save(self, wb: openpyxl.Workbook) -> None:
         self.check_closed()
+        original = os.stat(self.path)
+        expected = getattr(wb, "_invoices_version", _version(original))
+        self._extend_summary_ranges(wb)
         wb.calculation.fullCalcOnLoad = True           # Excel / LibreOffice recalculate on open
         fd, tmp = tempfile.mkstemp(suffix=".xlsx", dir=os.path.dirname(self.path) or ".")
         os.close(fd)
-        wb.save(tmp)
-        os.replace(tmp, self.path)                     # atomic: a crash never leaves half a workbook
+        try:
+            wb.save(tmp)
+            # Serialize the version check and replacement across processes. A stale
+            # snapshot must never erase a sale, expense or filing another writer saved.
+            folder, name = os.path.split(self.path)
+            mode = stat.S_IMODE(original.st_mode)
+            with FileLock(os.path.join(folder, f".{name}.lock"), timeout=10, mode=mode):
+                self.check_closed()
+                if not os.path.exists(self.path) or _version(os.stat(self.path)) != expected:
+                    raise WorkbookOpen(f"{name} changed during this operation; retry with the latest workbook")
+                os.chmod(tmp, mode)
+                os.replace(tmp, self.path)
+                wb._invoices_version = _version(os.stat(self.path))
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     @staticmethod
     def filed(wb: openpyxl.Workbook) -> dict[str, str]:
@@ -88,7 +151,7 @@ class XlsxTable:
         for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 200)):
             if row[0].value is not None and str(row[0].value).strip() == first:
                 index = {str(c.value).strip(): c.column for c in row if c.value is not None}
-                missing = [h for h in self.columns.values() if h.strip() not in index]
+                missing = [h for h in columns.table_fields(self.columns, index).values() if h.strip() not in index]
                 if missing:
                     raise KeyError(f"{ws.title}: headers not found: {missing}; map them in the config")
                 return row[0].row, index
@@ -97,9 +160,10 @@ class XlsxTable:
     def _records(self, wb) -> list[dict]:
         ws = self._sheet(wb)
         head, idx = self._header(ws)
+        mapped = columns.table_fields(self.columns, idx)
         out = []
         for r in range(head + 1, ws.max_row + 1):
-            raw = {f: ws.cell(r, idx[h.strip()]).value for f, h in self.columns.items()}
+            raw = {f: ws.cell(r, idx[h.strip()]).value for f, h in mapped.items()}
             if all(v in (None, "") for v in raw.values()):
                 continue
             rec = {}
@@ -122,13 +186,8 @@ class XlsxTable:
     def filed_quarters(self) -> set[str]:
         return set(XlsxBook.filed(self.book.load()))
 
-    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "") -> int | None:
-        norm = lambda s: re.sub(r"\s+", "", str(s or "")).upper()
-        for rec in self.records():
-            if norm(value) and norm(rec.get(field)) == norm(value) and (
-                    not supplier_vat or norm(rec.get("supplier_vat")) in ("", norm(supplier_vat))):
-                return rec["row"]
-        return None
+    def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "", doc_type: str = "") -> int | None:
+        return columns.find_row(self.records(), value, field, supplier_vat, doc_type)
 
     # ---- writing
     def _cell_value(self, field: str, v):
@@ -142,62 +201,86 @@ class XlsxTable:
         return str(v)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
+        if self.KIND == "expenses" and bookmath.expense_fx(row.get("fx"), row.get("currency")) is None:
+            return {"error": bookmath.EXPENSE_FX_ERROR}
         day = bookmath.day(row[self.date_field])
         if not day:
             return {"error": f"{self.date_field} must be a date (YYYY-MM-DD)"}
         q = bookmath.quarter(day)
         wb = self.book.load()
-        if q in XlsxBook.filed(wb) and not allow_filed:
+        filed = q in XlsxBook.filed(wb)
+        if filed and not allow_filed:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         recs = self._records(wb)
         for field in columns.UNIQUE[self.KIND]:
-            norm = lambda s: re.sub(r"\s+", "", str(s or "")).upper()
-            if row.get(field) and any(norm(r.get(field)) == norm(row[field]) for r in recs):
-                dup = next(r["row"] for r in recs if norm(r.get(field)) == norm(row[field]))
+            dup = columns.find_row(recs, row.get(field), field, row.get("supplier_vat", ""), row.get("doc_type", ""))
+            if dup is not None:
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
-        cells = {self.columns[k]: v for k, v in row.items() if k in self.columns and v not in (None, "")}
+        ws = self._sheet(wb)
+        head, idx = self._header(ws)
+        case = (row.get("vat_case") or "").strip().upper()
+        if self.KIND == "income" and case in ("PT / C1", "PT / C5"):
+            expenses = self.book.expenses
+            exp_ws = expenses._sheet(wb)
+            boxes, quarters = expenses._block(exp_ws)
+            cells = {}
+            for box, r in boxes.items():
+                cell = exp_ws.cell(r, quarters[q])
+                cells[box] = (cell.coordinate, cell.value)
+            if error := layout.sales_layout_error(case, idx, cells, filed):
+                return {"error": error}
+        mapped = columns.table_fields(self.columns, idx)
+        cells = {mapped[k]: v for k, v in row.items() if k in mapped and v not in (None, "")}
         if dry_run:
             return {"dry_run": True, "workbook": self.book.path, "sheet": self.book.names[self.KIND], "quarter": q,
                     "cells": cells}
-        ws = self._sheet(wb)
-        head, idx = self._header(ws)
-        formula_headers = set(layout.row_formulas(self.KIND, 0))
-        width = max(idx.values())
-        # every existing row as {column: value}, keeping columns the user added by hand
-        rows = []
-        for r in range(head + 1, ws.max_row + 1):
-            vals = {c: ws.cell(r, c).value for c in range(1, width + 1)}
-            inputs = [vals[idx[h.strip()]] for h in self.columns.values()]
-            if any(v not in (None, "") for v in inputs):
-                rows.append(vals)
-        new = {c: None for c in range(1, width + 1)}
-        for field, header in self.columns.items():
-            new[idx[header.strip()]] = self._cell_value(field, row.get(field))
-        new["_new"] = True
-        rows.append(new)
         date_col = idx[self.columns[self.date_field].strip()]
-        rows.sort(key=lambda v: (bookmath.day(v[date_col]) is None, bookmath.day(v[date_col]) or dt.date.max))
-        for r in range(head + 1, max(ws.max_row, head + len(rows)) + 1):     # clear, then rewrite sorted
-            for c in range(1, width + 1):
-                ws.cell(r, c).value = None
-        header_by_col = {c: h for h, c in idx.items()}
+        rows = []
+        for existing in ws.iter_rows(min_row=head + 1):
+            if any(c.value is not None or c.comment or c.hyperlink for c in existing):
+                rows.append((bookmath.day(existing[date_col - 1].value) or dt.date.max, existing))
+        rows.append((day, None))
+        rows.sort(key=lambda item: item[0])
+
+        # Hold the original cell objects until all moved rows have vacated their destinations.
+        for dest, (_, existing) in enumerate(rows, head + 1):
+            if existing and existing[0].row != dest:
+                for cell in existing:
+                    del ws[cell.coordinate]
         spec = {h: fmt for h, _, fmt in _spec(self.KIND)}
-        new_row = None
-        for k, vals in enumerate(rows):
-            r = head + 1 + k
-            formulas = layout.row_formulas(self.KIND, r)
-            for c in range(1, width + 1):
-                h = header_by_col.get(c, "")
-                cell = ws.cell(r, c)
-                cell.value = formulas[h] if h in formula_headers else vals.get(c)
-                if spec.get(h):
-                    cell.number_format = NUMBER_FORMATS[spec[h]]
-                if h.startswith("Box ") or h == "Net VAT benefit €":
-                    cell.fill = FILL["box"]
-                elif h.startswith("IRS deductible"):
-                    cell.fill = FILL["irs"]
-            if vals.get("_new"):
-                new_row = r
+        for dest, (_, existing) in enumerate(rows, head + 1):
+            if existing is None:
+                new_row = dest
+                for field, header in mapped.items():
+                    cell = ws.cell(dest, idx[header.strip()])
+                    cell.value = self._cell_value(field, row.get(field))
+                    if isinstance(cell.value, str):
+                        cell.data_type = "s"
+                for h, col in idx.items():
+                    cell = ws.cell(dest, col)
+                    if spec.get(h):
+                        cell.number_format = NUMBER_FORMATS[spec[h]]
+                    if h.startswith("Box ") or h == "Net VAT benefit €":
+                        cell.fill = FILL["box"]
+                    elif h.startswith("IRS deductible"):
+                        cell.fill = FILL["irs"]
+            else:
+                if existing[0].row != dest:
+                    for source in existing:
+                        cell = ws.cell(dest, source.column)
+                        cell._style = copy(source._style)
+                        if source.data_type == "f" and isinstance(source.value, str):
+                            cell.value = Translator(source.value, origin=source.coordinate).translate_formula(cell.coordinate)
+                        else:
+                            cell.value, cell.data_type = source.value, source.data_type
+                        cell.comment = copy(source.comment)
+                        if source.hyperlink:
+                            cell.hyperlink = copy(source.hyperlink)
+                if not any(existing[idx[h.strip()] - 1].value not in (None, "") for h in mapped.values()):
+                    continue  # user notes outside the booking columns
+            for h, formula in layout.row_formulas(self.KIND, dest).items():
+                if h in idx:
+                    ws.cell(dest, idx[h]).value = formula
         self.book.save(wb)
         return {"written": True, "workbook": self.book.path, "sheet": ws.title, "quarter": q, "row": new_row}
 
@@ -234,8 +317,15 @@ class XlsxExpenses(XlsxTable):
         boxes, quarters = self._block(ws)
         filed = XlsxBook.filed(wb)
         frozen = {q: {b: bookmath.num(ws.cell(r, quarters[q]).value) or 0.0 for b, r in boxes.items()} for q in filed}
-        opening = bookmath.num(ws.cell(boxes[61], quarters["Q1"]).value) or 0.0
-        all_q = bookmath.declaration(self._records(wb), self.book.income._records(wb), opening, frozen)
+        for q in filed:
+            if 96 not in boxes or bookmath.num(ws.cell(boxes[96], quarters[q]).value) is None:
+                raise ValueError(f"missing or invalid {q} box 96 in the books for {self.book.year}")
+        manual = {}
+        for q, col in quarters.items():
+            if q not in filed:
+                manual[q] = {box: value for box, r in boxes.items()
+                             if (value := bookmath.num(ws.cell(r, col).value)) is not None}
+        all_q = bookmath.declaration(self._records(wb), self.book.income._records(wb), 0, frozen, manual)
         return all_q, filed
 
     def declaration(self, q: str) -> dict:
@@ -256,7 +346,7 @@ class XlsxExpenses(XlsxTable):
                 ws.cell(boxes[int(b)], quarters[q]).value = v
         self.book.save(wb)
 
-    def freeze(self, q: str, dry_run: bool = True) -> dict:
+    def freeze(self, q: str, dry_run: bool = True, box_values: dict[int, float] | None = None) -> dict:
         wb = self.book.load()
         all_q, filed = self._declaration(wb)
         exp_rows = [r["row"] for r in self._records(wb) if r["quarter"] == q]
@@ -268,9 +358,10 @@ class XlsxExpenses(XlsxTable):
             return {"dry_run": True, **plan}
         ws = self._sheet(wb)
         boxes, quarters = self._block(ws)
+        amounts = {**all_q[q], **(box_values or {})}
         for b, r in boxes.items():
             cell = ws.cell(r, quarters[q])
-            cell.value = all_q[q].get(b, 0.0)
+            cell.value = amounts.get(b, 0.0)
             cell.fill = FILL["filed"]
         if META not in wb.sheetnames:
             wb.create_sheet(META).sheet_state = "hidden"
@@ -278,6 +369,28 @@ class XlsxExpenses(XlsxTable):
             wb[META].append(["filed", q, dt.datetime.now().isoformat(timespec="seconds")])
         self.book.save(wb)
         return {"frozen": True, **plan}
+
+
+def _publish_new(staged: str, path: str) -> None:
+    """Publish a finished workbook without taking another creator's filename."""
+    if os.name == "nt":
+        os.rename(staged, path)  # Windows rename refuses an existing destination.
+        return
+    try:
+        os.link(staged, path)
+        return
+    except OSError as exc:
+        if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.ENOSYS):
+            raise
+    # Some mounted drives cannot create hard links. Reserve the name exclusively
+    # before replacing it with the finished file, and release it if publication fails.
+    with open(path, "xb"):
+        pass
+    try:
+        os.replace(staged, path)
+    except BaseException:
+        os.unlink(path)
+        raise
 
 
 def create_workbook(path: str, year: int, expenses_name: str, income_name: str, opening_credit: float = 0.0) -> dict:
@@ -343,6 +456,9 @@ def create_workbook(path: str, year: int, expenses_name: str, income_name: str, 
     exp.conditional_formatting.add(f"{doc}{first}:{doc}{end}", FormulaRule(
         formula=[f'ISNUMBER(SEARCH("MISSING",{doc}{first}))'], font=Font(bold=True, color="CC1A1A")))
     wb.calculation.fullCalcOnLoad = True
-    wb.save(path)
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(path) or ".") as staging:
+        staged = os.path.join(staging, "book.xlsx")
+        wb.save(staged)
+        _publish_new(staged, path)
     return {"workbook": path, "expenses_sheet": expenses_name, "income_sheet": income_name,
             "opening_credit": opening_credit}

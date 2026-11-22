@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import fx, vat
+from . import bookmath, fx, vat
 from .config import Config
 from .documents import parsers, qr, text
 from .model import Document
@@ -45,11 +45,12 @@ def file_name(doc: Document, rule: dict, ext: str = ".pdf") -> str:
 
 def expense_row(doc: Document, prop: dict, expense: str = "") -> dict:
     """The expense row add_expense takes, filled from a document and its proposal (any field can be changed)."""
-    fx_rate = prop["fx_rate"] if isinstance(prop["fx_rate"], float) else (1 if doc.currency == "EUR" else "")
+    rate = bookmath.num(prop["fx_rate"])
+    fx_rate = rate if rate is not None else (1 if doc.currency == "EUR" else "")
     return {
         "date": doc.date.isoformat() if doc.date else "", "expense": expense or _slug(doc, {"slug": prop.get("slug")}),
         "supplier": prop["supplier"], "country": doc.country, "supplier_vat": doc.supplier_vat,
-        "invoice_no": doc.invoice_no, "currency": doc.currency, "amount": doc.amount,
+        "invoice_no": doc.invoice_no, "doc_type": doc.doc_type, "currency": doc.currency, "amount": doc.amount,
         "vat_included": doc.vat_included, "fx": fx_rate, "nif": prop["nif_on_invoice"], "code": prop["vat_code"],
         "business_pct": prop["business_pct"], "document": prop["document"], "file": prop["file_name"],
         "account": prop["account"],
@@ -70,9 +71,12 @@ def proposal(doc: Document, cfg: Config) -> dict:
         "PDF receipt" if doc.doc_type == "receipt" else "PDF invoice")
     ext = os.path.splitext(doc.file)[1].lower() or ".pdf"
     sale = doc.doc_type == "sales_invoice"
+    checks = (["Cancelled document: keep it for review before booking"] if doc.cancelled
+              else vat.credit_note_checks(doc))
     return {
         "supplier": rule.get("name") or doc.supplier,     # QR codes carry only the NIF; the config can name it
-        "vat_code": "" if sale else rule.get("code") or vat.suggest_code(doc),
+        "vat_code": "" if sale or checks else rule.get("code") or vat.suggest_code(doc),
+        "checks": checks,
         "region": vat.region(doc.country),
         "fx_rate": fx_rate,
         "account": cfg.account(doc),

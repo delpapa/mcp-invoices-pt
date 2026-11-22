@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 
-from ..model import Document
+from ..model import Document, signed_amount
 
 DOC_TYPES = {"Fatura": "invoice", "Fatura simplificada": "simplified_invoice", "Fatura-recibo": "invoice_receipt",
              "Nota de crédito": "credit_note", "Nota de débito": "debit_note"}
@@ -33,7 +33,6 @@ def parse_csv(path: str) -> list[Document]:
         number, _, atcud = r[HEADER].partition(" / ")
         nif, _, name = r["Emitente"].partition(" - ")
         kind = DOC_TYPES.get(r["Tipo"].strip(), r["Tipo"].strip())
-        sign = -1 if kind == "credit_note" else 1   # the export shows credit notes as positive totals
         docs.append(Document(
             layer="efatura",
             doc_type=kind,
@@ -43,9 +42,9 @@ def parse_csv(path: str) -> list[Document]:
             country="PT",
             invoice_no=number.strip(),
             atcud=atcud.strip(),
-            amount=sign * _eur(r["Total"]),
-            vat_included=sign * _eur(r["IVA"]),
-            extra={"base": sign * _eur(r["Base Tributável"]), "sector": r["Setor"].strip(),
+            amount=signed_amount(_eur(r["Total"]), kind),
+            vat_included=signed_amount(_eur(r["IVA"]), kind),
+            extra={"base": signed_amount(_eur(r["Base Tributável"]), kind), "sector": r["Setor"].strip(),
                    "status": r["Situação"].strip()},
         ))
     return docs

@@ -113,6 +113,8 @@ The usual cross-border cases are handled:
   recibo (RG/RC). That covers telecoms, utilities, landlords, shops and restaurants: anything issued by certified
   software.
 - PDFs, or a photo of the paper receipt.
+- Credit notes from QR codes and e-Fatura reduce the booked amount. For a Portuguese credit note with IVA,
+  the booking proposal leaves the VAT code or sales VAT case blank for review of the adjustment.
 - The recibos verdes, faturas and faturas-recibo **you** issue on the Portal das Finanças.
 - The **e-Fatura** CSV export, for invoices that only exist there.
 - Your **submitted Declaração Periódica** PDF, used to check and lock a quarter you have filed.
@@ -190,7 +192,7 @@ Excel, LibreOffice or Numbers. A **Google Sheet** is an option: set `backend: go
 
 **Expenses sheet**
 - **Declaração Periódica**, one column per quarter:
-  - the boxes you type on the Portal: 3, 4, 7, 8, 12, 13, 16, 17, 20, 24, 61 and 98;
+  - the boxes you type on the Portal: 1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 16, 17, 20, 24, 61 and 98;
   - the boxes the Portal calculates, so you can check them: 90, 91, 92, 93, 94 and 96.
   - Box 61 (the credit carried in) is the previous quarter's box 96. Q1's comes from the previous year's Q4.
 - **QUARTERS**: quarter sums under the table's columns.
@@ -199,7 +201,11 @@ Excel, LibreOffice or Numbers. A **Google Sheet** is an option: set `backend: go
 **Income sheet**
 - **IRS & SS**, per quarter:
   - gross income by invoice date, for IRS Anexo B;
-  - income by recibo date, for the quarterly Segurança Social declaration;
+  - income received in the calendar year, by recibo date, for sales recorded in this book.
+    The `income_totals` tool also checks earlier income books matching the configured workbook paths or
+    Google tab names. For example, a December invoice paid in January contributes to January’s quarter.
+    The requested year’s books must exist. Include any receipts from archived books outside that configuration
+    when preparing the Segurança Social declaration;
   - business expenses.
 - **The table**, one row per sale.
 
@@ -220,8 +226,13 @@ The cells are ordinary formulas, so you can read, check and change the books by 
 | **Net VAT benefit €** | IVA you get back minus IVA you self-charge (0 for reverse charge) |
 | **IRS deductible €** | The business cost for IRS: what you paid, times the business share, minus the IVA you recover |
 | **Document** | What backs the row: QR-verified PDF, invoice, receipt, e-Fatura only, no invoice, MISSING |
+| **Document type** | Type used in duplicate checks, such as `invoice` or `credit_note` |
 | **Payment account** | Which card or account paid |
 | **Q** | The quarter, from the date |
+
+On older expense sheets you can append a **Document type** header to the right of the table and fill in the types
+for any historical rows with overlapping numbers. A blank or absent type keeps the original duplicate check by
+supplier VAT ID and invoice number.
 
 ### VAT codes (purchases)
 
@@ -243,9 +254,21 @@ The cells are ordinary formulas, so you can read, check and change the books by 
 
 | Code | When | Boxes |
 |---|---|---|
+| `PT / C1` | Mainland reduced-rate sale, IVA at 6% | 1 + 2 |
+| `PT / C5` | Mainland intermediate-rate sale, IVA at 13% | 5 + 6 |
 | `PT / C3` | Portuguese client, IVA at 23% | 3 + 4 |
 | `EU / C7` | Business client in another EU country, no IVA | 7, and the Declaração Recapitulativa |
 | `NON-EU / C8` | Client outside the EU, no IVA | 8 |
+
+Each income row supports one VAT case. Review sales with multiple rates before booking them. Books created
+with the older layout need income columns and declaration rows for boxes 1, 2, 5 and 6, plus updated formulas
+for totals 90 and 92. Check previously booked `PT / C3` sales against their printed rate.
+
+For an existing year, keep the original books and make a copy of your config. In the copy, set
+`paths.workbook` to a new filename (or use new `google.expenses_tab` and `google.income_tab` names).
+Use `create_year_sheet` with the same year and opening credit. Book the original input rows into the
+new template so it generates their formulas. Restore previously filed quarters from their submitted
+returns with `mark_filed`, then compare the quarterly totals and carried credit before switching books.
 
 Box numbers follow the Declaração Periódica in force for periods **before 1 July 2027**. Portaria 298/2026 changes
 the return after that, and this project will follow.
@@ -364,8 +387,14 @@ copy.
   nothing else, that document is the sale. Its QR code gives the date, amount, IVA, withholding and client tax id.
   Add a `clients` rule so it books with the client's name.
 - **With an invoice of your own:** if you also send your own invoice (e.g. in dollars to a foreign client), the
-  plan pairs it with its Portal document by date and amount. The row keeps both, and the exchange rate implied by
-  the two.
+  plan checks the dates, amounts and available client tax IDs. If several documents fit, the plan lists them
+  under `needs_reading` with their possible matches. Once you identify a pair, pass both files to
+  `propose_income`. The row keeps both documents and the exchange rate implied by their gross totals.
+- **Payment after invoicing.** A Portal fatura (FT/FS) supplies the invoice date. A recibo (RG/RC) or
+  fatura-recibo (FR) supplies the payment date used for Segurança Social. When a separate recibo arrives,
+  find the invoice in your income books, including earlier years. If the sale was already booked and the
+  receipt settles it in full, enter the receipt number, date and file on that row by hand. Keep its invoice
+  date and amount. Adding another income row for the receipt would count the sale twice.
 
 ### Type the return
 

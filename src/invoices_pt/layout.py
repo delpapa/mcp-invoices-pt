@@ -7,15 +7,18 @@ row per sale. VAT maths are sheet formulas, so the sheet stays readable and edit
 
 from __future__ import annotations
 
-from .vat import CODES, EU, SALES_CODES
+import re
+from itertools import count
+
+from .vat import CODES, EU, NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES, SALES_CODES
 
 EU_ARRAY = "{" + ",".join(f'"{c}"' for c in sorted(EU)) + "}"
 DOCUMENT_LABELS = ["PDF ✓ QR-verified", "PDF invoice", "PDF receipt", "e-Fatura only", "No invoice",
                    "MISSING file", "MISSING (no data yet)"]
 
-EXP_HEADER_ROW, EXP_FIRST_ROW = 30, 31
+EXP_HEADER_ROW, EXP_FIRST_ROW = 34, 35
 INC_HEADER_ROW, INC_FIRST_ROW = 7, 8
-BLOCK_TITLE_ROW, SUMS_ROW = 3, 23
+BLOCK_TITLE_ROW, SUMS_ROW = 3, 27
 QUARTER_COLS = {"Q1": "E", "Q2": "F", "Q3": "G", "Q4": "H"}
 
 
@@ -28,27 +31,45 @@ def _region(col: str) -> str:
     return f'=IF({col}{{r}}="","",IF({col}{{r}}="PT","PT",IF(ISNUMBER(MATCH({col}{{r}},{eu},0)),"EU","OutEU")))'
 
 
+EXPENSE_FX = 'IF(L{r}="",IF(OR(I{r}="",TRIM(I{r})="EUR"),1,NA()),IF(L{r}>0,L{r},NA()))'
+BUSINESS_SHARE = 'IF(Q{r}="",1,Q{r})'
+# Both converted amounts are already euro cents. Restore the exact cent difference
+# before applying the share so binary subtraction cannot bias a half-cent tie.
+DOMESTIC_VAT = 'ROUND(M{r}-N{r},2)'
+REVERSE_CHARGE_COLUMNS = []
+for code, (base_box, vat_box) in REVERSE_CHARGE_BOXES.items():
+    REVERSE_CHARGE_COLUMNS.extend([
+        (f"Box {base_box}", f'=IF(TRIM(P{{r}})="{code}",N{{r}},0)', "num"),
+        (f"Box {vat_box}", f'=IF(TRIM(P{{r}})="{code}",ROUND(N{{r}}*{NORMAL_RATE},2),0)', "num"),
+    ])
+
+
 # (header, formula template with {r} for the row, or None for an input column, number format)
 EXPENSE_COLUMNS = [
     ("Date", None, "date"), ("Q", _q("A"), ""), ("Expense", None, ""), ("Supplier", None, ""),
     ("Country", None, ""), ("Region", _region("E"), ""), ("VAT", None, ""), ("Invoice no.", None, ""),
     ("Currency", None, ""), ("Amount paid", None, "num"), ("VAT included", None, "num"), ("FX to EUR", None, "fx"),
-    ("Amount €", '=IF(J{r}="","",ROUND(J{r}/IF(L{r}="",1,L{r}),2))', "num"),
-    ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/IF(L{r}="",1,L{r}),2))', "num"),
+    ("Amount €", '=IF(J{r}="","",ROUND(J{r}/' + EXPENSE_FX + ',2))', "num"),
+    ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/' + EXPENSE_FX + ',2))', "num"),
     ("NIF?", None, ""), ("VAT code", None, ""), ("Business %", None, "pct"),
-    ("Box 3", '=IF(P{r}="NON-EU-RC",N{r},0)', "num"),
-    ("Box 4", '=IF(P{r}="NON-EU-RC",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 12", '=IF(P{r}="EU-RC-GOODS",N{r},0)', "num"),
-    ("Box 13", '=IF(P{r}="EU-RC-GOODS",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 16", '=IF(P{r}="EU-RC",N{r},0)', "num"),
-    ("Box 17", '=IF(P{r}="EU-RC",ROUND(N{r}*0.23,2),0)', "num"),
-    ("Box 20", '=IF(P{r}="PT-ASSET",ROUND((M{r}-N{r})*Q{r},2),0)', "num"),
-    ("Box 24", '=IF(P{r}="PT",ROUND((M{r}-N{r})*Q{r},2),0)+ROUND((S{r}+U{r}+W{r})*Q{r},2)', "num"),
+    *REVERSE_CHARGE_COLUMNS,
+    ("Box 20", '=IF(TRIM(P{r})="PT-ASSET",ROUND(' + DOMESTIC_VAT + '*' + BUSINESS_SHARE + ',2),0)', "num"),
+    ("Box 24", '=IF(TRIM(P{r})="PT",ROUND(' + DOMESTIC_VAT + '*' + BUSINESS_SHARE + ',2),0)+ROUND((S{r}+U{r}+W{r})*' + BUSINESS_SHARE + ',2)', "num"),
     ("Box 98", "=R{r}", "num"),
     ("Net VAT benefit €", "=X{r}+Y{r}-S{r}-U{r}-W{r}", "num"),
-    ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*Q{r}-AA{r},2))', "num"),
-    ("Document", None, ""), ("File", None, ""), ("Payment account", None, ""),
+    ("IRS deductible € (Anexo B)", '=IF(M{r}="","",ROUND(M{r}*' + BUSINESS_SHARE + '-AA{r},2))', "num"),
+    ("Document", None, ""), ("File", None, ""), ("Payment account", None, ""), ("Document type", None, ""),
 ]
+
+
+def _sales_columns(case: str) -> list[tuple]:
+    base_box, tax_box = SALES_BOXES[case]
+    columns = [(f"Box {base_box}", f'=IF(TRIM(S{{r}})="{case}",N{{r}},0)', "num")]
+    if tax_box:
+        columns.append((f"Box {tax_box}", f'=IF(TRIM(S{{r}})="{case}",N(P{{r}}),0)', "num"))
+    return columns
+
+
 INCOME_COLUMNS = [
     ("Invoice date", None, "date"), ("Q (IVA)", _q("A"), ""), ("Client", None, ""), ("Country", None, ""),
     ("Region", _region("D"), ""), ("Client tax ID", None, ""), ("Your invoice no.", None, ""),
@@ -56,9 +77,9 @@ INCOME_COLUMNS = [
     ("Amount (orig.)", None, "num"), ("FX (per €)", None, "fx"), ("Net € (AT recibo)", None, "num"),
     ("IVA %", None, ""), ("IVA €", None, "num"), ("IRS withheld €", None, "num"),
     ("Total received €", '=IF(N{r}="","",N{r}+N(P{r})-N(Q{r}))', "num"), ("VAT case", None, ""),
-    ("Box 3", '=IF(S{r}="PT / C3",N{r},0)', "num"), ("Box 4", '=IF(S{r}="PT / C3",N(P{r}),0)', "num"),
-    ("Box 7", '=IF(S{r}="EU / C7",N{r},0)', "num"), ("Box 8", '=IF(S{r}="NON-EU / C8",N{r},0)', "num"),
+    *_sales_columns("PT / C3"), *_sales_columns("EU / C7"), *_sales_columns("NON-EU / C8"),
     ("Invoice file", None, ""), ("Recibo file", None, ""), ("Account", None, ""),
+    *_sales_columns("PT / C1"), *_sales_columns("PT / C5"),
 ]
 FORMATS = {"date": {"type": "DATE", "pattern": "dd.mm.yyyy"}, "num": {"type": "NUMBER", "pattern": "#,##0.00"},
            "fx": {"type": "NUMBER", "pattern": "0.0000"}, "pct": {"type": "PERCENT", "pattern": "0%"}}
@@ -77,6 +98,29 @@ def row_formulas(kind: str, r: int) -> dict[str, str]:
     """Header -> formula for row `r` of a table in the default layout."""
     cols = EXPENSE_COLUMNS if kind == "expenses" else INCOME_COLUMNS
     return {h: f.format(r=r) for h, f, _ in cols if f}
+
+
+def sales_layout_error(case: str, headers: dict, cells: dict, frozen: bool) -> str | None:
+    """Check both tabs of a book before accepting a sale using the newer fields.
+
+    cells maps each declaration box to its A1 address and its formula or frozen value.
+    The old template totals are simple additions of cell references. Check these
+    directly while leaving custom formulas to the workbook owner.
+    """
+    message = f"{case} requires the updated income columns and declaration formulas; upgrade the workbook layout first"
+    for box, total in zip(SALES_BOXES[case], (90, 92)):
+        if f"Box {box}" not in headers or box not in cells or total not in cells:
+            return message
+        if frozen:
+            continue
+        address, formula = cells[box]
+        total_formula = str(cells[total][1]).replace("$", "").replace(" ", "").upper()
+        if not str(formula).startswith("=") or not total_formula.startswith("="):
+            return message
+        if re.fullmatch(r"=[A-Z]+[0-9]+(?:\+[A-Z]+[0-9]+)*", total_formula):
+            if address not in total_formula[1:].split("+"):
+                return message
+    return None
 
 
 def expense_letter(header: str) -> str:
@@ -101,6 +145,10 @@ def _i(income_tab: str, header: str, q: str, end: int | None = None) -> str:
 
 
 BLOCK = [  # box, label, formula builder (q, income_tab) -> formula, for the boxes you type
+    ("1", "Base 6%: PT sales", lambda q, it, end: f"={_i(it, 'Box 1', q, end)}"),
+    ("2", "IVA 6% on box 1", lambda q, it, end: f"={_i(it, 'Box 2', q, end)}"),
+    ("5", "Base 13%: PT sales", lambda q, it, end: f"={_i(it, 'Box 5', q, end)}"),
+    ("6", "IVA 13% on box 5", lambda q, it, end: f"={_i(it, 'Box 6', q, end)}"),
     ("3", "Base 23%: PT sales + non-EU purchases (self-charged)", lambda q, it, end: f"={_i(it, 'Box 3', q, end)}+{_e('Box 3', q, end)}"),
     ("4", "IVA 23% on box 3", lambda q, it, end: f"={_i(it, 'Box 4', q, end)}+{_e('Box 4', q, end)}"),
     ("7", "EU business clients, no IVA (+ Recapitulativa)", lambda q, it, end: f"={_i(it, 'Box 7', q, end)}"),
@@ -114,10 +162,17 @@ BLOCK = [  # box, label, formula builder (q, income_tab) -> formula, for the box
     ("61", "Credit from previous quarter (= its box 96)", None),
     ("98", "Q 06-A: non-EU purchases self-charged (base)", lambda q, it, end: f"={_e('Box 98', q, end)}"),
 ]
-RESULTS = [  # box, label, formula on the block's own rows ({c} = quarter column, {rN} = row of box N)
-    ("90", "Total base (1+3+5+7+8+9+10+16+18)", "={c}{r3}+{c}{r7}+{c}{r8}+{c}{r12}+{c}{r16}"),
-    ("91", "IVA in your favour (20+24+61)", "={c}{r20}+{c}{r24}+{c}{r61}"),
-    ("92", "IVA in favour of the State (4+13+17)", "={c}{r4}+{c}{r13}+{c}{r17}"),
+
+
+def _result_sum(box: int, label: str) -> tuple[str, str, str]:
+    fields = RESULT_SUMS[box]
+    description = "+".join(str(field) for field in fields)
+    formula = "=" + "+".join(f"{{c}}{{r{field}}}" for field in fields)
+    return str(box), f"{label} ({description})", formula
+
+
+RESULTS = [  # {c} = quarter column, {rN} = row of box N
+    _result_sum(90, "Total base"), _result_sum(91, "IVA in your favour"), _result_sum(92, "IVA in favour of the State"),
     ("93", "IVA to pay", "=MAX({c}{r92}-{c}{r91},0)"),
     ("94", "IVA to recover", "=MAX({c}{r91}-{c}{r92},0)"),
     ("96", "Credit to carry into next quarter's box 61", "={c}{r94}"),
@@ -128,6 +183,7 @@ SUM_HEADERS = ["Amount €", "Net € (-VAT)", "Box 3", "Box 4", "Box 12", "Box 
 
 def expense_values(year: int, income_tab: str, opening_credit: float, end: int | None = None) -> list[list]:
     """All cell contents of a new expenses tab (rows 1..header), formulas included."""
+    income_tab = income_tab.replace("'", "''")
     width = len(EXPENSE_COLUMNS)
     rows: list[list] = [[f"EXPENSES {year}"], [], ["Declaração Periódica", "", "", "", *QUARTER_COLS]]
     box_row = {}
@@ -171,13 +227,24 @@ def expense_values(year: int, income_tab: str, opening_credit: float, end: int |
 
 
 def income_values(year: int, expenses_tab: str, end: int | None = None) -> list[list]:
-    irs, e = expense_letter("IRS deductible € (Anexo B)"), _end(end)
-    exp_sum = lambda q: f"=SUMIFS('{expenses_tab}'!${irs}${EXP_HEADER_ROW}:${irs}{e},'{expenses_tab}'!$B${EXP_HEADER_ROW}:$B{e},\"{q}\")"
-    inc_sum = lambda col, qcol, q: f'=SUMIFS(${col}${INC_HEADER_ROW}:${col}{e},${qcol}${INC_HEADER_ROW}:${qcol}{e},"{q}")'
+    expenses_tab = expenses_tab.replace("'", "''")
+    e = _end(end)
+
+    def period_sum(amount: str, date: str, start_row: int, quarter: str, tab: str = "") -> str:
+        prefix = f"'{tab}'!" if tab else ""
+        values = f"{prefix}${amount}${start_row}:${amount}{e}"
+        dates = f"{prefix}${date}${start_row}:${date}{e}"
+        month = 3 * int(quarter[1]) - 2
+        return (f'=SUMIFS({values},{dates},">="&DATE({year},{month},1),'
+                f'{dates},"<"&DATE({year},{month + 3},1))')
+
     rows: list[list] = [[f"INCOME {year}"], ["IRS & SS", "", *QUARTER_COLS, str(year)]]
-    for label, f in [("Gross income € (IRS Anexo B, by invoice date)", lambda q: inc_sum("N", "B", q)),
-                     ("Income € by recibo date (Segurança Social quarterly declaration)", lambda q: inc_sum("N", "J", q)),
-                     ("Business expenses € (IRS deductible, Anexo B quadro 17 if used)", exp_sum)]:
+    for label, f in [("Gross income € (IRS Anexo B, by invoice date)", lambda q: period_sum("N", "A", INC_HEADER_ROW, q)),
+                     ("Income € by recibo date (Segurança Social quarterly declaration) — this book",
+                      lambda q: period_sum("N", "I", INC_HEADER_ROW, q)),
+                     ("Business expenses € (IRS deductible, Anexo B quadro 17 if used)",
+                      lambda q: period_sum(expense_letter("IRS deductible € (Anexo B)"), "A",
+                                           EXP_HEADER_ROW, q, expenses_tab))]:
         n = len(rows) + 1
         rows.append([label, ""] + [f(q) for q in QUARTER_COLS] + [f"=SUM(C{n}:F{n})"])
     while len(rows) < INC_HEADER_ROW - 1:
@@ -216,48 +283,74 @@ def _validation(sid: int, col: int, first_row: int, rows: int, values: list[str]
         "showCustomUi": True, "strict": False}}}
 
 
+def _write_layout(sheet_id: int, values: list[list]) -> dict:
+    """Encode the generated template as typed cells for spreadsheets.batchUpdate."""
+    rows = []
+    for line in values:
+        cells = []
+        for value in line:
+            if value == "":
+                cells.append({})
+                continue
+            if isinstance(value, (int, float)):
+                kind = "numberValue"
+            else:
+                kind = "formulaValue" if value.startswith("=") else "stringValue"
+            cells.append({"userEnteredValue": {kind: value}})
+        rows.append({"values": cells})
+    return {"updateCells": {"start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
+                            "rows": rows, "fields": "userEnteredValue"}}
+
+
 def create_year(sh: gspread.Spreadsheet, year: int, expenses_tab: str, income_tab: str,
                 opening_credit: float = 0.0, rows: int = 1000) -> dict:
     """Add the expenses and income tabs for a year to a spreadsheet. Refuses if either tab exists."""
-    existing = {w.title for w in sh.worksheets()}
+    sheets = sh.worksheets()
+    existing = {w.title for w in sheets}
     if expenses_tab in existing or income_tab in existing:
         raise ValueError(f"{expenses_tab} or {income_tab} already exists")
-    exp = sh.add_worksheet(expenses_tab, rows=rows, cols=len(EXPENSE_COLUMNS))
-    inc = sh.add_worksheet(income_tab, rows=rows, cols=len(INCOME_COLUMNS))
-    exp.update(values=expense_values(year, income_tab, opening_credit), range_name="A1", value_input_option="USER_ENTERED")
-    inc.update(values=income_values(year, expenses_tab), range_name="A1", value_input_option="USER_ENTERED")
+    # Assign IDs up front so both tabs and their contents can be committed in one batch.
+    used = {w.id for w in sheets}
+    available = (sheet_id for sheet_id in count() if sheet_id not in used)
+    exp_id, inc_id = next(available), next(available)
+    reqs = [{"addSheet": {"properties": {"sheetId": sheet_id, "title": title,
+                                         "gridProperties": {"rowCount": rows, "columnCount": width}}}}
+            for sheet_id, title, width in ((exp_id, expenses_tab, len(EXPENSE_COLUMNS)),
+                                           (inc_id, income_tab, len(INCOME_COLUMNS)))]
+    reqs.append(_write_layout(exp_id, expense_values(year, income_tab, opening_credit)))
+    reqs.append(_write_layout(inc_id, income_values(year, expenses_tab)))
     names = [h for h, _, _ in EXPENSE_COLUMNS]
     block_end = BLOCK_TITLE_ROW + len(BLOCK) + len(RESULTS)
-    reqs = _formats(exp.id, EXPENSE_COLUMNS, EXP_HEADER_ROW, EXP_FIRST_ROW, rows)
-    reqs += _formats(inc.id, INCOME_COLUMNS, INC_HEADER_ROW, INC_FIRST_ROW, rows)
+    reqs += _formats(exp_id, EXPENSE_COLUMNS, EXP_HEADER_ROW, EXP_FIRST_ROW, rows)
+    reqs += _formats(inc_id, INCOME_COLUMNS, INC_HEADER_ROW, INC_FIRST_ROW, rows)
     reqs += [
-        {"repeatCell": {"range": _grid(exp.id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+        {"repeatCell": {"range": _grid(exp_id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(inc.id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+        {"repeatCell": {"range": _grid(inc_id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, BLOCK_TITLE_ROW - 1, BLOCK_TITLE_ROW, 0, 8),
+        {"repeatCell": {"range": _grid(exp_id, BLOCK_TITLE_ROW - 1, BLOCK_TITLE_ROW, 0, 8),
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 1, "green": .95, "blue": .75}}},
                         "fields": "userEnteredFormat(textFormat,backgroundColor)"}},
-        {"repeatCell": {"range": _grid(exp.id, BLOCK_TITLE_ROW, block_end, 4, 8), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
+        {"repeatCell": {"range": _grid(exp_id, BLOCK_TITLE_ROW, block_end, 4, 8), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, SUMS_ROW - 1, SUMS_ROW + 5, 0, len(names)),
+        {"repeatCell": {"range": _grid(exp_id, SUMS_ROW - 1, SUMS_ROW + 5, 0, len(names)),
                         "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"], "textFormat": {"bold": False}}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, SUMS_ROW - 1, SUMS_ROW, 0, len(names)),
+        {"repeatCell": {"range": _grid(exp_id, SUMS_ROW - 1, SUMS_ROW, 0, len(names)),
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
                         "fields": "userEnteredFormat(textFormat,wrapStrategy)"}},
-        {"repeatCell": {"range": _grid(inc.id, 1, 2, 0, 7), "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+        {"repeatCell": {"range": _grid(inc_id, 1, 2, 0, 7), "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(inc.id, 2, 5, 2, 7), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
+        {"repeatCell": {"range": _grid(inc_id, 2, 5, 2, 7), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        _validation(exp.id, names.index("VAT code"), EXP_FIRST_ROW, rows, list(CODES)),
-        _validation(exp.id, names.index("Document"), EXP_FIRST_ROW, rows, DOCUMENT_LABELS),
-        _validation(inc.id, [h for h, _, _ in INCOME_COLUMNS].index("VAT case"), INC_FIRST_ROW, rows, list(SALES_CODES)),
-        {"addConditionalFormatRule": {"index": 0, "rule": {"ranges": [_grid(exp.id, EXP_FIRST_ROW - 1, rows, names.index("Document"), names.index("Document") + 1)],
+        _validation(exp_id, names.index("VAT code"), EXP_FIRST_ROW, rows, list(CODES)),
+        _validation(exp_id, names.index("Document"), EXP_FIRST_ROW, rows, DOCUMENT_LABELS),
+        _validation(inc_id, [h for h, _, _ in INCOME_COLUMNS].index("VAT case"), INC_FIRST_ROW, rows, list(SALES_CODES)),
+        {"addConditionalFormatRule": {"index": 0, "rule": {"ranges": [_grid(exp_id, EXP_FIRST_ROW - 1, rows, names.index("Document"), names.index("Document") + 1)],
                                                            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
                                                                {"userEnteredValue": f'=REGEXMATCH({expense_letter("Document")}{EXP_FIRST_ROW},"MISSING")'}]},
                                                                "format": {"textFormat": {"bold": True, "foregroundColor": {"red": .8, "green": .1, "blue": .1}}}}}}},
-        {"updateSheetProperties": {"properties": {"sheetId": exp.id, "gridProperties": {"frozenColumnCount": 3}},
+        {"updateSheetProperties": {"properties": {"sheetId": exp_id, "gridProperties": {"frozenColumnCount": 3}},
                                    "fields": "gridProperties.frozenColumnCount"}},
     ]
     sh.batch_update({"requests": reqs})

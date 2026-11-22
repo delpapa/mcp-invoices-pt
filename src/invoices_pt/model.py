@@ -15,6 +15,11 @@ MARKERS = {
 }
 
 
+def signed_amount(value: float, doc_type: str) -> float:
+    """Credit notes reverse amounts even when the source prints an unsigned value."""
+    return -abs(value) if doc_type == "credit_note" else value
+
+
 @dataclass
 class Document:
     layer: str                      # how it was read: "qr", "efatura", "parser:<name>" or "text"
@@ -48,3 +53,8 @@ class Document:
         if not self.text:
             d.pop("text")
         return d
+
+    @property
+    def cancelled(self) -> bool:
+        status = str(self.extra.get("status", "")).strip().casefold()
+        return (self.layer == "qr" and status == "a") or status in {"anulado", "anulada"}

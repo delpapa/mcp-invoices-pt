@@ -7,6 +7,7 @@ deletes the temporary tabs again. Opt-in:
 """
 
 import os
+from uuid import uuid4
 
 import pytest
 
@@ -30,10 +31,17 @@ SALES = [
     dict(invoice_date="2099-03-03", client="PT Client", country="PT", invoice_no="S2", recibo_no="FR 1",
          recibo_date="2099-03-03", currency="EUR", amount=615, fx=1, net_eur=500, vat_rate=23, vat_eur=115, withheld=0,
          vat_case="PT / C3"),
+    dict(invoice_date="2099-07-01", client="PT reduced", invoice_no="S3", net_eur=100, vat_rate=6, vat_eur=6,
+         vat_case="PT / C1"),
+    dict(invoice_date="2099-07-02", client="PT intermediate", invoice_no="S4", net_eur=200, vat_rate=13, vat_eur=26,
+         vat_case="PT / C5"),
+    dict(invoice_date="2099-12-31", client="US Client", invoice_no="S5", recibo_no="RG 5",
+         recibo_date="2100-01-01", net_eur=7, vat_case="NON-EU / C8"),
 ]
 EXPECTED = {  # hand-computed: opening credit 100; USD 20 at 1.25 = 16.00 self-charged at 23% = 3.68
     "Q1": {3: 516.0, 4: 118.68, 8: 1000.0, 16: 30.0, 17: 6.9, 24: 22.08, 61: 100.0, 98: 16.0, 90: 1546.0,
            91: 122.08, 92: 125.58, 93: 3.5, 94: 0.0, 96: 0.0},
+    "Q3": {1: 100.0, 2: 6.0, 3: 0.0, 4: 0.0, 5: 200.0, 6: 26.0, 90: 300.0, 92: 32.0, 93: 32.0},
     "Q2": {12: 20.0, 13: 4.6, 24: 4.6, 61: 0.0, 91: 4.6, 92: 4.6, 96: 0.0},
 }
 
@@ -46,11 +54,14 @@ def test_layout_end_to_end():
     real = Config.load()
     if real.backend != "google":
         pytest.skip("the configured backend is not a Google Sheet")
+    run_id = uuid4().hex[:12]
+    exp_name = f"ZZTEST_Expenses_2099_{run_id}"
+    inc_name = f"ZZTEST_Income_2099_{run_id}"
     cfg = Config({"backend": "google", "taxpayer": real.data.get("taxpayer", {}),
-                  "google": {**real.google, "expenses_tab": "ZZTEST_Expenses_{year}", "income_tab": "ZZTEST_Income_{year}"}})
+                  "google": {**real.google, "expenses_tab": exp_name, "income_tab": inc_name}})
     sh = open_spreadsheet(cfg)
     try:
-        layout.create_year(sh, 2099, "ZZTEST_Expenses_2099", "ZZTEST_Income_2099", opening_credit=100.0)
+        layout.create_year(sh, 2099, exp_name, inc_name, opening_credit=100.0)
         exp, inc = ExpenseSheet(cfg, 2099, sh), IncomeSheet(cfg, 2099, sh)
         for row in PURCHASES:
             assert exp.add(row, dry_run=False).get("written"), row
@@ -65,12 +76,12 @@ def test_layout_end_to_end():
         assert (totals["Income € by "]["Q1"], totals["Income € by "]["Q2"]) == (500.0, 1000.0)   # by recibo date
         assert [r["quarter"] for r in exp.records()] == ["Q1", "Q1", "Q1", "Q2"]
         frozen = exp.freeze("Q1", dry_run=False)
-        assert frozen["expense_rows"] == "31-33" and frozen["income_rows"] == "8-9"
+        assert frozen["expense_rows"] == "35-37" and frozen["income_rows"] == "8-9"
         assert exp.filed_quarters() == {"Q1"} and inc.filed_quarters() == {"Q1"}
         assert "locked" in exp.add(dict(date="2099-01-09", invoice_no="Z")).get("error", "")
         assert exp.declaration("Q1")["live_formulas"] is False
     finally:
-        for name in ("ZZTEST_Expenses_2099", "ZZTEST_Income_2099"):
+        for name in (exp_name, inc_name):
             try:
                 sh.del_worksheet(sh.worksheet(name))
             except Exception:

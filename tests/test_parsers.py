@@ -186,3 +186,22 @@ def test_money(raw, value):
                                         ("27 junio 2026", dt.date(2026, 6, 27)), ("3 de março de 2026", dt.date(2026, 3, 3))])
 def test_dates(raw, value):
     assert _common.date(raw) == value
+
+
+@pytest.mark.parametrize("fee_section", ["", "Transfer fees\nConversion fee details unavailable\n"])
+def test_wise_requires_fee_total_in_fee_section(fee_section):
+    from invoices_pt.documents.parsers import wise
+
+    confirmation = (WISE.split("Amount paid by", 1)[0] + fee_section
+                    + "Transfer amount\nTotal 2,000.00 USD\n1 USD = 0.8500 EUR")
+    doc = wise.parse(confirmation)
+    assert doc.amount is None and doc.currency == ""
+
+
+def test_wise_zero_fee_and_unusable_printed_rate():
+    from invoices_pt.documents.parsers import wise
+
+    text = WISE.replace("Total 12.40 USD", "Total 0.00 USD").replace("0.8500 EUR", "0.0000 EUR")
+    result = wise.parse(text)
+    assert result.amount == 0 and result.currency == "USD"
+    assert "fx_rate" not in result.extra

@@ -1,5 +1,8 @@
 import datetime as dt
 
+import pytest
+
+from invoices_pt import bookmath
 from invoices_pt.config import Config
 from invoices_pt.documents import qr
 from invoices_pt.income import propose
@@ -56,6 +59,40 @@ def test_portuguese_client_with_iva(qr_png, cfg):
     assert out["checks"] == []
 
 
+def test_issued_credit_note_reverses_income_and_withholding(qr_png, cfg):
+    payload = PT_SALE.replace("D:FR", "D:NC").replace("G:FR", "G:NC") + "*P:20.00"
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    row = result["row"]
+    assert (row["amount"], row["net_eur"], row["vat_eur"], row["withheld"]) == (-615.0, -500.0, -115.0, -20.0)
+    assert row["vat_case"] == ""
+    assert any("credit note" in check for check in result["checks"])
+
+
+def test_exchange_rate_compares_both_gross_totals(qr_png, cfg):
+    result = propose(cfg, invoice(amount=738.0), at_doc(qr_png, PT_SALE))
+    assert (result["row"]["amount"], result["row"]["net_eur"], result["row"]["fx"]) == (738, 500, 1.2)
+
+
+def test_missing_invoice_fields_remain_unknown(qr_png, cfg):
+    partial = invoice(day=None, amount=None)
+    for receipt in (None, at_doc(qr_png)):
+        result = propose(cfg, partial, receipt)
+        row = result["row"]
+        assert (row["invoice_date"], row["amount"], row["fx"]) == ("", "", "")
+        assert result["file_names"] == {}
+        assert any("date" in c for c in result["checks"])
+        assert any("amount" in c for c in result["checks"])
+
+
+def test_mismatched_printed_client_id_warns_on_explicit_pair(qr_png, cfg):
+    own = invoice()
+    own.buyer_nif = "PT500000001"
+    receipt = at_doc(qr_png, PT_SALE)
+    assert any("client tax ID" in c for c in propose(cfg, own, receipt)["checks"])
+    own.buyer_nif = "PT500000000"
+    assert not any("tax ID" in c for c in propose(cfg, own, receipt)["checks"])
+
+
 def test_missing_income(tmp_path):
     (tmp_path / "inv1.pdf").write_bytes(b"x")
     (tmp_path / "stray.pdf").write_bytes(b"x")
@@ -67,3 +104,65 @@ def test_missing_income(tmp_path):
     assert out["no_at_document"] == ["row 9 04.03.2026 EXC JD002"]
     assert out["file_not_found"] == ["row 8 04.02.2026 EXC JD001: rec1.pdf"]
     assert out["unbooked_files"] == ["stray.pdf"]
+
+
+@pytest.mark.parametrize("base_field,vat_field,tax,rate,case", [
+    ("I3", "I4", 30, 6, "PT / C1"), ("I5", "I6", 65, 13, "PT / C5"),
+])
+def test_propose_uses_printed_sale_rate(qr_png, cfg, base_field, vat_field, tax, rate, case):
+    payload = PT_SALE.replace("I7:", base_field + ":").replace("I8:", vat_field + ":")
+    payload = payload.replace("115.00", str(tax)).replace("615.00", str(500 + tax))
+    cfg = Config({**cfg.data, "clients": [{"match": "Example Client", "vat_case": "PT / C3"}]})
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
+    assert any("client rule" in check for check in result["checks"])
+    assert result["row"]["vat_case"] == case
+    assert result["row"]["vat_rate"] == rate
+
+
+def test_mixed_rate_sale_needs_review(qr_png, cfg):
+    payload = PT_SALE.replace("N:115.00*O:615.00", "I3:100.00*I4:6.00*N:121.00*O:721.00")
+    cfg = Config({**cfg.data, "clients": [{"match": "Example Client", "vat_case": "PT / C3"}]})
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
+    assert result["row"]["vat_case"] == ""
+    assert any("rate breakdown" in check for check in result["checks"])
+
+@pytest.mark.parametrize("kind", ["FT", "FS", "FR", "RG"])
+def test_at_document_only_recognizes_payments_on_receipts(qr_png, cfg, kind):
+    payload = PT_SALE.replace("D:FR", f"D:{kind}").replace("G:FR", f"G:{kind}")
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    row = result["row"]
+    gross, received, _ = bookmath.income_totals([], [row], 2026)
+    assert gross["Q1"] == 500
+    if kind in ("FR", "RG"):
+        assert received["Q1"] == 500
+        check_existing = any("existing row" in check for check in result["checks"])
+        assert check_existing == (kind == "RG")
+        assert row["recibo_no"] == f"{kind} A1/3" and row["recibo_date"] == "2026-03-05"
+        assert row["recibo_file"] == result["file_names"]["recibo"]
+    else:
+        assert received["Q1"] == 0
+        assert row["recibo_date"] == row["recibo_no"] == row["recibo_file"] == ""
+        assert row["invoice_no"] == f"{kind} A1/3"
+        assert row["invoice_file"] == result["file_names"]["invoice"]
+        assert any("no receipt" in check for check in result["checks"])
+
+
+def test_paired_unpaid_invoices_preserve_both_attachments(qr_png, cfg):
+    payload = PT_SALE.replace("D:FR", "D:FT").replace("G:FR", "G:FT")
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
+    row = result["row"]
+    assert row["recibo_date"] == row["recibo_no"] == ""
+    assert row["invoice_file"] == result["file_names"]["invoice"]
+    assert row["recibo_file"] == result["file_names"]["at_document"]
+    assert row["invoice_file"] != row["recibo_file"]
+
+
+def test_one_cent_difference_does_not_pair_two_euro_sales(cfg):
+    from invoices_pt.inbox import pair_sales
+
+    own = invoice(amount=11, currency="EUR")
+    portal = Document("qr", date=own.date, amount=10.99, doc_type="invoice_receipt", vat_included=0)
+    assert any("differs" in note for note in propose(cfg, own, portal)["checks"])
+    assert (own, portal) not in pair_sales([own], [portal], cfg)
+    portal.amount = 11
+    assert pair_sales([own], [portal], cfg) == [(own, portal)]

@@ -9,9 +9,10 @@ import tempfile
 from collections.abc import Iterator
 
 import zxingcpp
-from PIL import Image
+from PIL import Image, ImageSequence
 
-from ..model import Document
+from . import IMAGE_EXT
+from ..model import Document, signed_amount
 
 # Field codes from the AT technical specification
 FIELDS = {
@@ -23,15 +24,18 @@ FIELDS = {
 }
 DOC_TYPES = {"FT": "invoice", "FS": "simplified_invoice", "FR": "invoice_receipt", "NC": "credit_note",
              "ND": "debit_note", "RG": "receipt", "RC": "receipt"}
-IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
-KEEP = ("buyer_country", "not_subject", "withholding", "base_exempt", "base_reduced", "vat_reduced",
+KEEP = ("status", "fiscal_space", "buyer_country", "not_subject", "withholding", "base_exempt", "base_reduced", "vat_reduced",
         "base_intermediate", "vat_intermediate", "base_normal", "vat_normal")
 
 
 def parse_payload(text: str) -> dict | None:
     """Split an AT payload ("A:123*B:456*...") into named fields; None if it is not one."""
     kv = dict(part.split(":", 1) for part in text.split("*") if ":" in part)
-    if "A" not in kv or "H" not in kv:
+    if not all(kv.get(k) for k in ("A", "D", "F", "G", "H")):
+        return None
+    try:
+        dt.datetime.strptime(kv["F"], "%Y%m%d")
+    except ValueError:
         return None
     return {FIELDS.get(k, k): v for k, v in kv.items()}
 
@@ -39,7 +43,7 @@ def parse_payload(text: str) -> dict | None:
 def _pages(path: str, dpi: int) -> Iterator[Image.Image]:
     if path.lower().endswith(IMAGE_EXT):
         with Image.open(path) as img:
-            yield img
+            yield from ImageSequence.Iterator(img)
         return
     with tempfile.TemporaryDirectory() as d:
         subprocess.run(["pdftoppm", "-r", str(dpi), "-png", path, f"{d}/p"], check=True, capture_output=True)
@@ -59,20 +63,22 @@ def read_qr(path: str, dpi: int = 250) -> dict | None:
 
 
 def to_document(fields: dict, file: str = "") -> Document:
+    kind = DOC_TYPES.get(fields.get("doc_type", ""), fields.get("doc_type", ""))
+
     def num(k: str) -> float:
         return float(fields.get(k) or 0)
 
     return Document(
         layer="qr",
         file=file,
-        doc_type=DOC_TYPES.get(fields.get("doc_type", ""), fields.get("doc_type", "")),
+        doc_type=kind,
         date=dt.datetime.strptime(fields["date"], "%Y%m%d").date(),
         supplier_vat="PT" + fields["supplier_nif"],
         country="PT",
         invoice_no=fields.get("doc_id", ""),
         atcud=fields.get("atcud", ""),
-        amount=num("total"),
-        vat_included=num("total_vat"),
+        amount=signed_amount(num("total"), kind) if fields.get("total") else None,
+        vat_included=signed_amount(num("total_vat"), kind),
         buyer_nif=fields.get("buyer_nif", ""),
         markers=["exempt"] if num("total_vat") == 0 and num("base_exempt") > 0 else [],
         extra={k: fields[k] for k in KEEP if k in fields},

@@ -8,27 +8,45 @@ so both agree to the cent.
 from __future__ import annotations
 
 import datetime as dt
+import math
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
+from .vat import NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES
+
 QUARTERS = ("Q1", "Q2", "Q3", "Q4")
-INPUT_BOXES = (3, 4, 7, 8, 12, 13, 16, 17, 20, 24, 61, 98)
+INPUT_BOXES = (1, 2, 3, 4, 5, 6, 7, 8, 12, 13, 16, 17, 20, 24, 61, 98)
 RESULT_BOXES = (90, 91, 92, 93, 94, 96)
 
 
+def _cents(amount: Decimal) -> Decimal:
+    return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def r2(x: float) -> float:
-    return float(Decimal(repr(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    return float(_cents(Decimal(str(x))))
 
 
 def num(v) -> float | None:
-    """A cell value (number or text like '1,234.56', '25%', '€3.10') as a float."""
+    """Read a numeric cell or US/Portuguese numeric text, keeping '1,234' as a thousands grouping."""
     if v is None or v == "":
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    s = str(v).strip().replace(",", "").replace("€", "").replace("$", "")
+    s = str(v).replace("€", "").replace("$", "").strip()
     pct = s.endswith("%")
+    s = s.removesuffix("%").strip()
+    if re.fullmatch(r"[+-]?\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d+)?", s):
+        s = "".join(s.split())
+    if "," in s:
+        if re.fullmatch(r"[+-]?[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?", s):
+            s = s.replace(",", "")
+        elif re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+", s):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            return None
     try:
-        x = float(s.rstrip("%"))
+        x = float(s)
     except ValueError:
         return None
     return x / 100 if pct else x
@@ -52,6 +70,16 @@ def quarter(v) -> str:
     return f"Q{(d.month - 1) // 3 + 1}" if d else ""
 
 
+EXPENSE_FX_ERROR = "fx must be a positive finite exchange rate; only EUR expenses can use a blank rate"
+
+
+def expense_fx(value, currency: str = "") -> float | None:
+    if value in (None, ""):
+        return 1.0 if (currency or "").strip().upper() in ("", "EUR") else None
+    rate = num(value)
+    return rate if rate is not None and math.isfinite(rate) and rate > 0 else None
+
+
 def expense_row(rec: dict) -> dict:
     """Computed columns of one expense row, as the sheet formulas compute them."""
     amount = num(rec.get("amount"))
@@ -59,35 +87,44 @@ def expense_row(rec: dict) -> dict:
     if amount is None:
         out["amount_eur"] = out["net_eur"] = out["irs"] = None
         return out
-    vat_incl = num(rec.get("vat_included")) or 0.0
-    fx = num(rec.get("fx")) or 1.0
-    biz = num(rec.get("business_pct"))
-    biz = 1.0 if biz is None else biz
-    code = (rec.get("code") or "").strip()
-    m, n = r2(amount / fx), r2((amount - vat_incl) / fx)
+    # Preserve decimal half-cents through subtraction and multiplication before ROUND.
+    amount = Decimal(str(amount))
+    vat_incl = Decimal(str(num(rec.get("vat_included")) or 0))
+    rate = expense_fx(rec.get("fx"), rec.get("currency"))
+    if rate is None:
+        raise ValueError(f"Expense row {rec.get('row', '?')}: {EXPENSE_FX_ERROR}")
+    fx = Decimal(str(rate))
+    share = num(rec.get("business_pct"))
+    biz = Decimal(str(share)) if share is not None else Decimal(1)
+    code = (rec.get("code") or "").strip().upper()
+    m, n = _cents(amount / fx), _cents((amount - vat_incl) / fx)
     out["amount_eur"], out["net_eur"] = m, n
-    if code == "NON-EU-RC":
-        out[3], out[4] = n, r2(n * 0.23)
-    if code == "EU-RC-GOODS":
-        out[12], out[13] = n, r2(n * 0.23)
-    if code == "EU-RC":
-        out[16], out[17] = n, r2(n * 0.23)
-    if code == "PT-ASSET":
-        out[20] = r2((m - n) * biz)
-    out[24] = (r2((m - n) * biz) if code == "PT" else 0.0) + r2((out[4] + out[13] + out[17]) * biz)
+    reverse_vat = Decimal(0)
+    if code in REVERSE_CHARGE_BOXES:
+        base_box, vat_box = REVERSE_CHARGE_BOXES[code]
+        reverse_vat = _cents(n * Decimal(str(NORMAL_RATE)))
+        out[base_box], out[vat_box] = n, reverse_vat
+    domestic = _cents((m - n) * biz)
+    out[20] = domestic if code == "PT-ASSET" else 0
+    out[24] = (domestic if code == "PT" else 0) + _cents(reverse_vat * biz)
     out[98] = out[3]
-    out["net_vat"] = out[20] + out[24] - out[4] - out[13] - out[17]
-    out["irs"] = r2(m * biz - out["net_vat"])
-    return out
+    out["net_vat"] = out[20] + out[24] - reverse_vat
+    out["irs"] = _cents(m * biz - out["net_vat"])
+    return {key: float(value) for key, value in out.items()}
 
 
 def income_row(rec: dict) -> dict:
     net = num(rec.get("net_eur")) or 0.0
     vat = num(rec.get("vat_eur")) or 0.0
-    case = (rec.get("vat_case") or "").strip()
-    return {3: net if case == "PT / C3" else 0.0, 4: vat if case == "PT / C3" else 0.0,
-            7: net if case == "EU / C7" else 0.0, 8: net if case == "NON-EU / C8" else 0.0,
-            "net_eur": net, "withheld": num(rec.get("withheld")) or 0.0}
+    case = (rec.get("vat_case") or "").strip().upper()
+    out = {box: 0.0 for pair in SALES_BOXES.values() for box in pair if box is not None}
+    out.update(net_eur=net, withheld=num(rec.get("withheld")) or 0.0)
+    if case in SALES_BOXES:
+        base_box, tax_box = SALES_BOXES[case]
+        out[base_box] = net
+        if tax_box:
+            out[tax_box] = vat
+    return out
 
 
 def quarter_inputs(expenses: list[dict], income: list[dict], q: str) -> dict[int, float]:
@@ -100,22 +137,26 @@ def quarter_inputs(expenses: list[dict], income: list[dict], q: str) -> dict[int
     for rec in income:
         if quarter(rec.get("invoice_date")) == q:
             row = income_row(rec)
-            for b in (3, 4, 7, 8):
-                boxes[b] += row[b]
+            for b, value in row.items():
+                if b in boxes:
+                    boxes[b] += value
     return {b: r2(v) for b, v in boxes.items()}
 
 
-def results(boxes: dict[int, float]) -> dict[int, float]:
-    b = boxes
-    out = {90: b[3] + b[7] + b[8] + b[12] + b[16], 91: b[20] + b[24] + b[61], 92: b[4] + b[13] + b[17]}
-    out[93] = max(out[92] - out[91], 0.0)
-    out[94] = max(out[91] - out[92], 0.0)
-    out[96] = out[94]
+def results(boxes: dict[int, float], fixed: dict[int, float] | None = None) -> dict[int, float]:
+    # A number entered directly into a result cell replaces its formula and
+    # becomes the input to the remaining live result cells.
+    fixed = fixed or {}
+    out = {box: fixed.get(box, sum(boxes.get(b, 0.0) for b in fields)) for box, fields in RESULT_SUMS.items()}
+    out[93] = fixed.get(93, max(out[92] - out[91], 0.0))
+    out[94] = fixed.get(94, max(out[91] - out[92], 0.0))
+    out[96] = fixed.get(96, out[94])
     return {k: r2(v) for k, v in out.items()}
 
 
 def declaration(expenses: list[dict], income: list[dict], opening_credit: float,
-                frozen: dict[str, dict[int, float]] | None = None) -> dict[str, dict[int, float]]:
+                frozen: dict[str, dict[int, float]] | None = None,
+                overrides: dict[str, dict[int, float]] | None = None) -> dict[str, dict[int, float]]:
     """All four quarters. Quarters in `frozen` (filed) keep their stored values; box 61 chains from box 96."""
     frozen = frozen or {}
     out, carried = {}, opening_credit
@@ -125,29 +166,41 @@ def declaration(expenses: list[dict], income: list[dict], opening_credit: float,
         else:
             boxes = quarter_inputs(expenses, income, q)
             boxes[61] = r2(carried)
-            boxes.update(results(boxes))
+            manual = (overrides or {}).get(q, {})
+            boxes.update(manual)
+            boxes.update(results(boxes, manual))
         out[q] = boxes
         carried = boxes.get(96, 0.0)
     return out
 
 
+RECEIPT_TOTAL = "Income € by recibo date (Segurança Social quarterly declaration)"
+
+
+def _year_totals(rows, key, value, year: int) -> dict:
+    amounts = {q: 0.0 for q in QUARTERS}
+    for row in rows:
+        date = day(row.get(key))
+        if date and date.year == year:
+            amounts[quarter(date)] += value(row) or 0.0
+    amounts = {q: r2(v) for q, v in amounts.items()}
+    amounts[str(year)] = r2(sum(amounts.values()))
+    return amounts
+
+
+def receipt_totals(income, year: int) -> dict:
+    return {"item": RECEIPT_TOTAL,
+            **_year_totals(income, "recibo_date", lambda r: num(r.get("net_eur")), year)}
+
+
 def income_totals(expenses: list[dict], income: list[dict], year: int) -> list[dict]:
-    """IRS / Segurança Social totals per quarter, as the income tab's top block computes them."""
-    def by(rows, key, value):
-        out = {q: 0.0 for q in QUARTERS}
-        for rec in rows:
-            q = quarter(rec.get(key))
-            if q:
-                out[q] += value(rec) or 0.0
-        out = {q: r2(v) for q, v in out.items()}
-        out[str(year)] = r2(sum(out.values()))
-        return out
+    """IRS / Segurança Social totals for rows in this book."""
     return [
-        {"item": "Gross income € (IRS Anexo B, by invoice date)", **by(income, "invoice_date", lambda r: num(r.get("net_eur")))},
-        {"item": "Income € by recibo date (Segurança Social quarterly declaration)",
-         **by(income, "recibo_date", lambda r: num(r.get("net_eur")))},
+        {"item": "Gross income € (IRS Anexo B, by invoice date)",
+         **_year_totals(income, "invoice_date", lambda r: num(r.get("net_eur")), year)},
+        receipt_totals(income, year),
         {"item": "Business expenses € (IRS deductible, Anexo B quadro 17 if used)",
-         **by(expenses, "date", lambda r: expense_row(r)["irs"])},
+         **_year_totals(expenses, "date", lambda r: expense_row(r)["irs"], year)},
     ]
 
 

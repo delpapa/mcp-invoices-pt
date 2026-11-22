@@ -15,12 +15,13 @@ def matches(text: str) -> bool:
 
 
 def parse(text: str, file: str = "") -> Document:
-    fees = text.split("Transfer fees", 1)[-1]
+    fees = text.partition("Transfer fees")[2]
+    fees = re.split(r"\b(?:Transfer amount|Exchange rate|Total to)\b", fees, maxsplit=1)[0]
     fee = re.search(r"Total\s+([\d,]+\.\d{2})\s+([A-Z]{3})", fees)
-    rate = re.search(r"1 ([A-Z]{3}) = ([\d.]+) EUR", text)
+    rate = re.search(r"\b1 ([A-Z]{3}) = (\d+(?:\.\d+)?) EUR\b", text)
     currency = fee.group(2) if fee else ""
     extra = {}
-    if rate and rate.group(1) == currency:
+    if rate and rate.group(1) == currency and float(rate.group(2)) > 0:
         extra["fx_rate"] = round(1 / float(rate.group(2)), 4)   # units of currency per EUR, like the ECB
     return Document(
         layer=f"parser:{NAME}",

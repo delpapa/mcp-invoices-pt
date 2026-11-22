@@ -99,6 +99,64 @@ def test_extract_withholds_unrelated_text(user):
     assert "dinner" in server.extract(str(tmp / "inbox" / "letter.pdf"), read_anyway=True)["document"]["text"]
 
 
+def test_plan_requests_pairing_when_two_invoices_fit_one_sale(user):
+    server, tmp = user
+    other = ["INVOICE NO. JD002" if line.startswith("INVOICE NO.") else line for line in OWN_INVOICE]
+    text_pdf(tmp / "inbox" / "another_invoice.pdf", other)
+    plan = server.plan_inbox()
+    assert plan["sales"] == []
+    review = {os.path.basename(entry["path"]) for entry in plan["needs_reading"] if entry.get("possible_matches")}
+    assert review == {"another_invoice.pdf", "my_invoice.pdf", "recibo.png"}
+
+
+def test_propose_income_returns_checks_for_an_undated_document(user):
+    server, tmp = user
+    result = server.propose_income(invoice_path=str(tmp / "inbox" / "odd_invoice.pdf"))
+    assert result["file_names"] == {}
+    assert result["row"]["invoice_date"] == ""
+    assert any("issue date" in c for c in result["checks"])
+
+
+def test_plan_checks_client_identity_before_pairing_and_in_either_direction(user, qr_png):
+    server, tmp = user
+    conf = tmp / "config.yaml"
+    data = yaml.safe_load(conf.read_text())
+    data["clients"][0]["tax_id"] = "12-3456789"
+    conf.write_text(yaml.safe_dump(data))
+    inbox = tmp / "inbox"
+    # Two different clients paid the same price. Only one is named on the invoice.
+    qr_png(RECIBO.replace("B:000000000", "B:123456789"), folder=inbox, name="recibo.png")
+    qr_png(RECIBO.replace("B:000000000", "B:555555555").replace("RG A1/7", "RG A1/8"),
+           folder=inbox, name="other.png")
+    sales = server.plan_inbox()["sales"]
+    receipts = {os.path.basename(s["at_document"]): os.path.basename(s["invoice"]) for s in sales}
+    assert receipts == {"recibo.png": "my_invoice.pdf", "other.png": ""}
+    # Once both AT documents name the same client, the invoice cannot be assigned to either.
+    qr_png(RECIBO.replace("B:000000000", "B:123456789").replace("RG A1/7", "RG A1/8"),
+           folder=inbox, name="other.png")
+    assert server.plan_inbox()["sales"] == []
+
+
+def test_credit_note_agrees_across_qr_inbox_and_efatura(user, qr_png):
+    server, tmp = user
+    payload = ("A:500000003*B:999999990*C:PT*D:NC*F:20260414*G:NC 9/7*H:KKKK-7*"
+               "I1:PT*I7:100.00*I8:23.00*N:23.00*O:123.00")
+    path = qr_png(payload, folder=tmp / "inbox", name="credit.png")
+    csv = tmp / "inbox" / "e-fatura.csv"
+    csv.write_text(CSV.replace('"1.250,00 €";"0,00 €";"1.250,00 €"', '"123,00 €";"23,00 €";"100,00 €"'),
+                   encoding="utf-8")
+    qr_credit = server.extract(path)
+    csv_credit = server.read_efatura(str(csv))[1]
+    for result in (qr_credit, csv_credit):
+        doc = result["document"]
+        assert (doc["amount"], doc["vat_included"]) == (-123.0, -23.0)
+        assert result["proposal"]["vat_code"] == ""
+    planned = next(item for item in server.plan_inbox()["expenses"] if item["path"] == path)
+    assert planned["row"]["amount"] == -123.0
+    assert qr_credit["proposal"]["checks"] == csv_credit["proposal"]["checks"]
+    assert qr_credit["proposal"]["checks"][0] in planned["checks"]
+
+
 def test_sales_go_to_the_income_folder(user):
     server, tmp = user
     sale = server.plan_inbox()["sales"][0]

@@ -7,7 +7,7 @@ import os
 
 from mcp.server.mcpserver import MCPServer
 
-from . import __version__, report, vat
+from . import __version__, bookmath, report, vat
 from .config import Config
 from .declaration import find_return_pdf, parse_return_pdf
 from . import inbox
@@ -17,7 +17,7 @@ from .filing import file_document as file_document_
 from .filing import index_folder
 from .income import propose as propose_income_
 from .ledger import Ledger, sha256
-from .books import create_year, open_books, where
+from .books import annual_income_totals, create_year, open_books, where
 from .books import opening_credit as opening_credit_
 
 INSTRUCTIONS = """\
@@ -88,7 +88,7 @@ def extract(path: str, read_anyway: bool = False) -> dict:
         if looks is False and not read_anyway:
             out["document"].pop("text", None)
             out["warning"] = "this does not read like an invoice or receipt; its text was withheld (read_anyway=true)"
-    else:
+    elif not doc.cancelled:
         out["row"] = expense_row(doc, out["proposal"])
     return out
 
@@ -103,7 +103,7 @@ def read_efatura(csv_path: str) -> list[dict]:
 @mcp.tool()
 def add_expense(row: dict, dry_run: bool = True) -> dict:
     """Add one expense row to the year's expenses tab. `row` keys: date (YYYY-MM-DD), expense, supplier,
-    country, supplier_vat, invoice_no, currency, amount, vat_included, fx, nif, code, business_pct, document,
+    country, supplier_vat, invoice_no, doc_type, currency, amount, vat_included, fx, nif, code, business_pct, document,
     file, account. Refuses duplicates and quarters already filed. Call with dry_run=true first."""
     cfg = _cfg()
     year = dt.date.fromisoformat(str(row["date"])).year
@@ -169,10 +169,10 @@ def add_income(row: dict, dry_run: bool = True) -> dict:
 
 @mcp.tool()
 def income_totals(year: int) -> list[dict]:
-    """The IRS and Segurança Social totals at the top of the income tab, per quarter and for the year:
+    """IRS and Segurança Social totals per quarter and for the year, including receipts from older invoice books:
     gross income by invoice date (IRS), income by recibo date (Segurança Social quarterly declaration), and
     business expenses."""
-    return open_books(_cfg(), year)[1].summary()
+    return annual_income_totals(_cfg(), year)
 
 
 @mcp.tool()
@@ -204,13 +204,20 @@ def mark_filed(quarter: str, year: int, return_pdf: str = "", dry_run: bool = Tr
     shown = {b["box"]: b["value"] for b in sheet.declaration(q)["boxes"]}
     pdf = return_pdf or find_return_pdf(cfg.paths(year)["year_root"], q, year)
     diffs = []
+    overrides = {}
     if pdf:
         submitted = parse_return_pdf(pdf)
+        if not any(b in submitted and b in shown for b in bookmath.RESULT_BOXES):
+            return {"error": "No VAT return result boxes could be read from the PDF", "return_pdf": pdf}
         diffs = [{"box": b, "sheet": shown[b], "submitted": v} for b, v in sorted(submitted.items())
-                 if b in shown and abs((shown[b] or 0) - v) > 0.005]
-    result = {"freeze": sheet.freeze(q, dry_run=dry_run), "return_pdf": pdf or "not found", "differences": diffs}
+                 if b in shown and (shown[b] is None or abs(shown[b] - v) > 0.005)]
+        if apply_pdf_values:
+            overrides = {b: v for b, v in submitted.items() if b in shown}
+    if apply_pdf_values and not overrides:
+        return {"error": "Cannot apply submitted values without a return PDF containing recognized boxes",
+                "return_pdf": pdf or "not found"}
+    result = {"freeze": sheet.freeze(q, dry_run=dry_run, box_values=overrides), "return_pdf": pdf or "not found", "differences": diffs}
     if diffs and apply_pdf_values and not dry_run:
-        sheet.set_declaration(q, {d["box"]: d["submitted"] for d in diffs})
         result["applied_pdf_values"] = True
     return result
 
