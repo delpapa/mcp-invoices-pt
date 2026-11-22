@@ -8,6 +8,7 @@ row per sale. VAT maths are sheet formulas, so the sheet stays readable and edit
 from __future__ import annotations
 
 import re
+from itertools import count
 
 from .vat import CODES, EU, NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES, SALES_CODES
 
@@ -179,6 +180,7 @@ SUM_HEADERS = ["Amount €", "Net € (-VAT)", "Box 3", "Box 4", "Box 12", "Box 
 
 def expense_values(year: int, income_tab: str, opening_credit: float, end: int | None = None) -> list[list]:
     """All cell contents of a new expenses tab (rows 1..header), formulas included."""
+    income_tab = income_tab.replace("'", "''")
     width = len(EXPENSE_COLUMNS)
     rows: list[list] = [[f"EXPENSES {year}"], [], ["Declaração Periódica", "", "", "", *QUARTER_COLS]]
     box_row = {}
@@ -222,6 +224,7 @@ def expense_values(year: int, income_tab: str, opening_credit: float, end: int |
 
 
 def income_values(year: int, expenses_tab: str, end: int | None = None) -> list[list]:
+    expenses_tab = expenses_tab.replace("'", "''")
     irs, e = expense_letter("IRS deductible € (Anexo B)"), _end(end)
     exp_sum = lambda q: f"=SUMIFS('{expenses_tab}'!${irs}${EXP_HEADER_ROW}:${irs}{e},'{expenses_tab}'!$B${EXP_HEADER_ROW}:$B{e},\"{q}\")"
     inc_sum = lambda col, qcol, q: f'=SUMIFS(${col}${INC_HEADER_ROW}:${col}{e},${qcol}${INC_HEADER_ROW}:${qcol}{e},"{q}")'
@@ -267,48 +270,74 @@ def _validation(sid: int, col: int, first_row: int, rows: int, values: list[str]
         "showCustomUi": True, "strict": False}}}
 
 
+def _write_layout(sheet_id: int, values: list[list]) -> dict:
+    """Encode the generated template as typed cells for spreadsheets.batchUpdate."""
+    rows = []
+    for line in values:
+        cells = []
+        for value in line:
+            if value == "":
+                cells.append({})
+                continue
+            if isinstance(value, (int, float)):
+                kind = "numberValue"
+            else:
+                kind = "formulaValue" if value.startswith("=") else "stringValue"
+            cells.append({"userEnteredValue": {kind: value}})
+        rows.append({"values": cells})
+    return {"updateCells": {"start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
+                            "rows": rows, "fields": "userEnteredValue"}}
+
+
 def create_year(sh: gspread.Spreadsheet, year: int, expenses_tab: str, income_tab: str,
                 opening_credit: float = 0.0, rows: int = 1000) -> dict:
     """Add the expenses and income tabs for a year to a spreadsheet. Refuses if either tab exists."""
-    existing = {w.title for w in sh.worksheets()}
+    sheets = sh.worksheets()
+    existing = {w.title for w in sheets}
     if expenses_tab in existing or income_tab in existing:
         raise ValueError(f"{expenses_tab} or {income_tab} already exists")
-    exp = sh.add_worksheet(expenses_tab, rows=rows, cols=len(EXPENSE_COLUMNS))
-    inc = sh.add_worksheet(income_tab, rows=rows, cols=len(INCOME_COLUMNS))
-    exp.update(values=expense_values(year, income_tab, opening_credit), range_name="A1", value_input_option="USER_ENTERED")
-    inc.update(values=income_values(year, expenses_tab), range_name="A1", value_input_option="USER_ENTERED")
+    # Assign IDs up front so both tabs and their contents can be committed in one batch.
+    used = {w.id for w in sheets}
+    available = (sheet_id for sheet_id in count() if sheet_id not in used)
+    exp_id, inc_id = next(available), next(available)
+    reqs = [{"addSheet": {"properties": {"sheetId": sheet_id, "title": title,
+                                         "gridProperties": {"rowCount": rows, "columnCount": width}}}}
+            for sheet_id, title, width in ((exp_id, expenses_tab, len(EXPENSE_COLUMNS)),
+                                           (inc_id, income_tab, len(INCOME_COLUMNS)))]
+    reqs.append(_write_layout(exp_id, expense_values(year, income_tab, opening_credit)))
+    reqs.append(_write_layout(inc_id, income_values(year, expenses_tab)))
     names = [h for h, _, _ in EXPENSE_COLUMNS]
     block_end = BLOCK_TITLE_ROW + len(BLOCK) + len(RESULTS)
-    reqs = _formats(exp.id, EXPENSE_COLUMNS, EXP_HEADER_ROW, EXP_FIRST_ROW, rows)
-    reqs += _formats(inc.id, INCOME_COLUMNS, INC_HEADER_ROW, INC_FIRST_ROW, rows)
+    reqs += _formats(exp_id, EXPENSE_COLUMNS, EXP_HEADER_ROW, EXP_FIRST_ROW, rows)
+    reqs += _formats(inc_id, INCOME_COLUMNS, INC_HEADER_ROW, INC_FIRST_ROW, rows)
     reqs += [
-        {"repeatCell": {"range": _grid(exp.id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+        {"repeatCell": {"range": _grid(exp_id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(inc.id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+        {"repeatCell": {"range": _grid(inc_id, 0, 1, 0, 1), "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, BLOCK_TITLE_ROW - 1, BLOCK_TITLE_ROW, 0, 8),
+        {"repeatCell": {"range": _grid(exp_id, BLOCK_TITLE_ROW - 1, BLOCK_TITLE_ROW, 0, 8),
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 1, "green": .95, "blue": .75}}},
                         "fields": "userEnteredFormat(textFormat,backgroundColor)"}},
-        {"repeatCell": {"range": _grid(exp.id, BLOCK_TITLE_ROW, block_end, 4, 8), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
+        {"repeatCell": {"range": _grid(exp_id, BLOCK_TITLE_ROW, block_end, 4, 8), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, SUMS_ROW - 1, SUMS_ROW + 5, 0, len(names)),
+        {"repeatCell": {"range": _grid(exp_id, SUMS_ROW - 1, SUMS_ROW + 5, 0, len(names)),
                         "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"], "textFormat": {"bold": False}}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        {"repeatCell": {"range": _grid(exp.id, SUMS_ROW - 1, SUMS_ROW, 0, len(names)),
+        {"repeatCell": {"range": _grid(exp_id, SUMS_ROW - 1, SUMS_ROW, 0, len(names)),
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
                         "fields": "userEnteredFormat(textFormat,wrapStrategy)"}},
-        {"repeatCell": {"range": _grid(inc.id, 1, 2, 0, 7), "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+        {"repeatCell": {"range": _grid(inc_id, 1, 2, 0, 7), "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
                         "fields": "userEnteredFormat.textFormat"}},
-        {"repeatCell": {"range": _grid(inc.id, 2, 5, 2, 7), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
+        {"repeatCell": {"range": _grid(inc_id, 2, 5, 2, 7), "cell": {"userEnteredFormat": {"numberFormat": FORMATS["num"]}},
                         "fields": "userEnteredFormat.numberFormat"}},
-        _validation(exp.id, names.index("VAT code"), EXP_FIRST_ROW, rows, list(CODES)),
-        _validation(exp.id, names.index("Document"), EXP_FIRST_ROW, rows, DOCUMENT_LABELS),
-        _validation(inc.id, [h for h, _, _ in INCOME_COLUMNS].index("VAT case"), INC_FIRST_ROW, rows, list(SALES_CODES)),
-        {"addConditionalFormatRule": {"index": 0, "rule": {"ranges": [_grid(exp.id, EXP_FIRST_ROW - 1, rows, names.index("Document"), names.index("Document") + 1)],
+        _validation(exp_id, names.index("VAT code"), EXP_FIRST_ROW, rows, list(CODES)),
+        _validation(exp_id, names.index("Document"), EXP_FIRST_ROW, rows, DOCUMENT_LABELS),
+        _validation(inc_id, [h for h, _, _ in INCOME_COLUMNS].index("VAT case"), INC_FIRST_ROW, rows, list(SALES_CODES)),
+        {"addConditionalFormatRule": {"index": 0, "rule": {"ranges": [_grid(exp_id, EXP_FIRST_ROW - 1, rows, names.index("Document"), names.index("Document") + 1)],
                                                            "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [
                                                                {"userEnteredValue": f'=REGEXMATCH({expense_letter("Document")}{EXP_FIRST_ROW},"MISSING")'}]},
                                                                "format": {"textFormat": {"bold": True, "foregroundColor": {"red": .8, "green": .1, "blue": .1}}}}}}},
-        {"updateSheetProperties": {"properties": {"sheetId": exp.id, "gridProperties": {"frozenColumnCount": 3}},
+        {"updateSheetProperties": {"properties": {"sheetId": exp_id, "gridProperties": {"frozenColumnCount": 3}},
                                    "fields": "gridProperties.frozenColumnCount"}},
     ]
     sh.batch_update({"requests": reqs})
