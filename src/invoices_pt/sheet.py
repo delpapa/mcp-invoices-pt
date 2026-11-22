@@ -29,6 +29,17 @@ def _col(j: int) -> str:
     return gspread.utils.rowcol_to_a1(1, j + 1)[:-1]
 
 
+def _input_value(field: str, value) -> dict:
+    """Convert a booking field to a Sheets ExtendedValue without relying on the spreadsheet locale."""
+    if value is None or value == "":
+        return {}
+    if field in columns.DATE_FIELDS and (day := bookmath.day(value)):
+        return {"numberValue": (day - dt.date(1899, 12, 30)).days}
+    if field in columns.NUMBER_FIELDS and (number := bookmath.num(value)) is not None:
+        return {"numberValue": number}
+    return {"stringValue": str(value)}
+
+
 def _span(rows: list[int]) -> str:
     return f"{min(rows)}-{max(rows)}" if rows else "none"
 
@@ -49,7 +60,6 @@ class Table:
 
     KIND = ""
     COLUMNS: dict[str, str] = {}
-    TEXT_FIELDS: tuple[str, ...] = ()   # written as text so ids like 000123456 stay intact
     UNIQUE: tuple[str, ...] = ()        # fields that identify a row; a second row with the same value is refused
 
     def __init__(self, cfg: Config, year: int, sh: gspread.Spreadsheet | None = None):
@@ -130,30 +140,31 @@ class Table:
         sid = self.ws.id
         reqs = [{"insertDimension": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": last, "endIndex": last + 1},
                                      "inheritFromBefore": template is not None}}]
-        if template:     # copy the formulas and formats of the last row
-            reqs.append({"copyPaste": {"source": {"sheetId": sid, "startRowIndex": template - 1, "endRowIndex": template,
-                                                  "startColumnIndex": 0, "endColumnIndex": width},
-                                       "destination": {"sheetId": sid, "startRowIndex": last, "endRowIndex": last + 1,
-                                                       "startColumnIndex": 0, "endColumnIndex": width},
-                                       "pasteType": "PASTE_NORMAL"}})
-        self.sh.batch_update({"requests": reqs})
         new = last + 1
-        updates = []
-        if template is None:     # first row of a table made by layout.create_year: write its formulas
+        values_by_header = {}
+        if template:
+            source = {"sheetId": sid, "startRowIndex": template - 1, "endRowIndex": template,
+                      "startColumnIndex": 0, "endColumnIndex": width}
+            dest = {**source, "startRowIndex": last, "endRowIndex": new}
+            for paste in ("PASTE_FORMAT", "PASTE_FORMULA"):
+                reqs.append({"copyPaste": {"source": source, "destination": dest, "pasteType": paste}})
+        else:
             for header, formula in layout.row_formulas(self.KIND, new).items():
                 if header in idx:
-                    updates.append({"range": gspread.utils.rowcol_to_a1(new, idx[header] + 1), "values": [[formula]]})
+                    values_by_header[header] = {"formulaValue": formula}
         for field, header in mapped.items():
-            value = row.get(field, "")
-            if field in self.TEXT_FIELDS and value:
-                value = "'" + str(value)
-            updates.append({"range": gspread.utils.rowcol_to_a1(new, idx[header.strip()] + 1),
-                            "values": [[value if value is not None else ""]]})
-        self.ws.batch_update(updates, value_input_option="USER_ENTERED")
-        self.sh.batch_update({"requests": [{"sortRange": {
+            values_by_header[header.strip()] = _input_value(field, row.get(field))
+        for header, value in values_by_header.items():
+            reqs.append({"updateCells": {
+                "start": {"sheetId": sid, "rowIndex": last, "columnIndex": idx[header]},
+                "rows": [{"values": [{"userEnteredValue": value} if value else {}]}],
+                "fields": "userEnteredValue"}})
+        reqs.append({"sortRange": {
             "range": {"sheetId": sid, "startRowIndex": head, "endRowIndex": new, "startColumnIndex": 0,
                       "endColumnIndex": width},
-            "sortSpecs": [{"dimensionIndex": 0, "sortOrder": "ASCENDING"}]}}]})
+            "sortSpecs": [{"dimensionIndex": 0, "sortOrder": "ASCENDING"}]}})
+        # A rejected booking must leave the sheet untouched, including the template and its values.
+        self.sh.batch_update({"requests": reqs})
         key = next((f for f in self.UNIQUE if row.get(f) not in (None, "")), None)
         new_row = self.find(row[key], key, supplier_vat, doc_type) if key else None
         return {"written": True, "tab": self.ws.title, "quarter": q, "row": new_row}
@@ -162,7 +173,6 @@ class Table:
 class IncomeSheet(Table):
     KIND = "income"
     COLUMNS = columns.INCOME_FIELDS
-    TEXT_FIELDS = columns.TEXT_FIELDS["income"]
     UNIQUE = columns.UNIQUE["income"]
 
     def summary(self) -> list[dict]:
@@ -184,7 +194,6 @@ class IncomeSheet(Table):
 class ExpenseSheet(Table):
     KIND = "expenses"
     COLUMNS = columns.EXPENSE_FIELDS
-    TEXT_FIELDS = columns.TEXT_FIELDS["expenses"]
     UNIQUE = columns.UNIQUE["expenses"]
 
     # ---- the "Declaração Periódica" block above the table: rows "Box n", one column per quarter

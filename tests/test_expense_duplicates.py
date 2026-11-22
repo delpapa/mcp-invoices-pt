@@ -40,7 +40,7 @@ def test_sheets_returns_row_for_correct_supplier_and_handles_short_rows():
     def write_new_row(*args, **kwargs):
         rows.insert(2, ["2026-01-06", "inv1", "PT456"])
 
-    expenses.ws.batch_update.side_effect = write_new_row
+    sheet.batch_update.side_effect = write_new_row
 
     assert expenses.add(second, dry_run=False)["row"] == 3
     assert "already in row 3" in expenses.add(dict(second, supplier_vat="pt 456"))["error"]
@@ -83,7 +83,7 @@ def test_existing_workbook_without_document_type(cfg):
 
 @pytest.mark.parametrize("typed_layout", [False, True])
 def test_sheets_typed_expense_writes_and_duplicate_checks(typed_layout):
-    gspread = pytest.importorskip("gspread")
+    pytest.importorskip("gspread")
     from invoices_pt.sheet import ExpenseSheet
 
     sheet = Mock()
@@ -94,15 +94,17 @@ def test_sheets_typed_expense_writes_and_duplicate_checks(typed_layout):
     rows = [headers]
     expenses.ws.get_all_values.return_value = rows
 
-    def write_new_row(updates, **kwargs):
+    def write_new_row(body):
         cells = [""] * len(headers)
-        for update in updates:
-            r, c = gspread.utils.a1_to_rowcol(update["range"])
-            assert r == len(rows) + 1
-            cells[c - 1] = str(update["values"][0][0]).removeprefix("'")
+        for request in body["requests"]:
+            if "updateCells" in request:
+                update = request["updateCells"]
+                assert update["start"]["rowIndex"] == len(rows)
+                cell = update["rows"][0]["values"][0].get("userEnteredValue", {})
+                cells[update["start"]["columnIndex"]] = str(next(iter(cell.values()), ""))
         rows.append(cells)
 
-    expenses.ws.batch_update.side_effect = write_new_row
+    sheet.batch_update.side_effect = write_new_row
     invoice = {"date": "2026-01-05", "invoice_no": "42", "doc_type": "invoice", "supplier_vat": "PT123"}
     credit = dict(invoice, doc_type="credit_note")
     assert expenses.add(invoice, dry_run=False)["row"] == 2

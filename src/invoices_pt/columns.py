@@ -13,7 +13,6 @@ INCOME_FIELDS = {
     "vat_rate": "IVA %", "vat_eur": "IVA €", "withheld": "IRS withheld €", "vat_case": "VAT case",
     "invoice_file": "Invoice file", "recibo_file": "Recibo file", "account": "Account",
 }
-TEXT_FIELDS = {"expenses": ("supplier_vat", "invoice_no"), "income": ("client_tax_id", "invoice_no", "recibo_no")}
 # Expenses also compare the supplier VAT number when available. Own invoice numbers can repeat when a
 # template is not updated, so sales are identified by the AT document number and the invoice file.
 UNIQUE = {"expenses": ("invoice_no",), "income": ("recibo_no", "invoice_file")}
