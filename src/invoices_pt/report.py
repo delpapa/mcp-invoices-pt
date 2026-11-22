@@ -49,10 +49,31 @@ def monthly_gaps(records: list[dict], min_months: int = 3) -> list[dict]:
     return gaps
 
 
+def _document_files(folder: str) -> set[str]:
+    if not os.path.isdir(folder):
+        return set()
+    with os.scandir(folder) as entries:
+        return {entry.name for entry in entries if entry.name.lower().endswith(DOC_EXT) and entry.is_file()}
+
+
+def _compatible_payment(doc: Document, row: dict) -> bool:
+    def conflict(a, b):
+        return bool(_n(a) and _n(b) and _n(a) != _n(b))
+
+    if conflict(doc.currency, row.get("currency")) or conflict(doc.supplier_vat, row.get("supplier_vat")):
+        return False
+    if not (doc.supplier_vat and row.get("supplier_vat")) and conflict(doc.supplier, row.get("supplier")):
+        return False
+    # A payment receipt normally has a different document number from its invoice.
+    if "receipt" in (doc.doc_type, row.get("doc_type")):
+        return True
+    return not (conflict(doc.doc_type, row.get("doc_type")) or conflict(doc.invoice_no, row.get("invoice_no")))
+
+
 def missing(records: list[dict], folder: str, read=None) -> dict:
     """Rows flagged MISSING, rows whose file is gone, incomplete rows, files nobody booked, and monthly gaps.
     `read(path)` reads an unbooked file so it can be matched to a row it merely duplicates (e.g. a receipt)."""
-    files = {f for f in os.listdir(folder) if f.lower().endswith(DOC_EXT)} if os.path.isdir(folder) else set()
+    files = _document_files(folder)
     booked = {r["file"] for r in records if r["file"]}
     out = {"flagged": [], "file_not_found": [], "incomplete": [], "unbooked_files": [], "companion_files": [],
            "monthly_gaps": monthly_gaps(records)}
@@ -63,15 +84,22 @@ def missing(records: list[dict], folder: str, read=None) -> dict:
         if r["file"] and r["file"] not in files:
             out["file_not_found"].append(f"{tag}: {r['file']}")
         need = ["date", "amount"] + ([] if r["document"] == "No invoice" else ["invoice_no"])
-        if (gaps := [f for f in need if not str(r[f]).strip()]) and not r["document"].upper().startswith("MISSING"):
+        if (gaps := [f for f in need if r[f] is None or not str(r[f]).strip()]) and not r["document"].upper().startswith("MISSING"):
             out["incomplete"].append(f"{tag}: no {', '.join(gaps)}")
-    by_day_amount = {(_date(r["date"]), _amount(r["amount"])): r for r in records}
+    by_day_amount = collections.defaultdict(list)
+    for r in records:
+        day, amount = _date(r["date"]), _amount(r["amount"])
+        if day and amount is not None:
+            by_day_amount[day, amount].append(r)
     for f in sorted(files - booked):
         row = None
         if read:
             try:
                 doc: Document = read(os.path.join(folder, f))
-                row = by_day_amount.get((doc.date, round(doc.amount or 0, 2)))
+                candidates = [r for r in by_day_amount.get((doc.date, _amount(doc.amount)), ())
+                              if _compatible_payment(doc, r)]
+                if len(candidates) == 1:
+                    row = candidates[0]
             except Exception:
                 row = None
         if row:
@@ -83,7 +111,7 @@ def missing(records: list[dict], folder: str, read=None) -> dict:
 
 def missing_income(records: list[dict], folder: str) -> dict:
     """Income rows without an AT document (not paid or not issued yet), rows whose files are gone, unbooked files."""
-    files = {f for f in os.listdir(folder) if f.lower().endswith(DOC_EXT)} if os.path.isdir(folder) else set()
+    files = _document_files(folder)
     out = {"no_at_document": [], "file_not_found": [], "unbooked_files": []}
     for r in records:
         tag = f"row {r['row']} {r['invoice_date']} {r['client']} {r['invoice_no']}".strip()

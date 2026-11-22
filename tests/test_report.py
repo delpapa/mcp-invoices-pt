@@ -1,4 +1,5 @@
 import datetime as dt
+from pathlib import Path
 
 from invoices_pt.model import Document
 from invoices_pt.report import missing, monthly_gaps, reconcile_efatura
@@ -113,3 +114,38 @@ def test_reconcile_different_document_types_are_distinct():
     assert len(report["not_in_sheet"]) == 1
     assert report["pt_rows_not_in_efatura"] == []
     assert len(reconcile_efatura(docs[:1], [row])["not_in_sheet"]) == 1
+
+
+def test_missing_does_not_hide_unrelated_or_ambiguous_documents(tmp_path):
+    day = dt.date(2026, 1, 2)
+    rows = [dict(rec(31, day.isoformat(), "Market", 20, "A1", supplier_vat="PT1"), currency="EUR", doc_type="invoice"),
+            dict(rec(32, day.isoformat(), "Cafe", 20, "B1", supplier_vat="PT2"), currency="EUR", doc_type="invoice"),
+            rec(33, day.isoformat(), "Zero", 0, "C1")]
+    docs = {
+        "ambiguous.pdf": Document("t", date=day, amount=20),
+        "other_supplier.pdf": Document("t", date=day, amount=20, supplier_vat="PT3"),
+        "other_currency.pdf": Document("t", date=day, amount=20, supplier="Cafe", currency="USD"),
+        "different_invoice.pdf": Document("t", date=day, amount=20, supplier_vat="PT1", doc_type="invoice", invoice_no="A2"),
+        "credit.pdf": Document("t", date=day, amount=20, supplier_vat="PT1", doc_type="credit_note", invoice_no="A1"),
+        "unknown_amount.pdf": Document("t", date=day),
+        "receipt.pdf": Document("t", date=day, amount=20, supplier_vat="PT2", doc_type="receipt", invoice_no="R1")}
+    for name in docs:
+        (tmp_path / name).touch()
+    for order in (rows, rows[::-1]):
+        result = missing(order, str(tmp_path), read=lambda path: docs[Path(path).name])
+        assert result["companion_files"] == ["receipt.pdf (same payment as row 32)"]
+        assert result["unbooked_files"] == sorted(docs.keys() - {"receipt.pdf"})
+
+
+def test_reports_require_real_files_and_keep_zero_amounts(tmp_path):
+    from invoices_pt.report import missing_income
+
+    (tmp_path / "fake.pdf").mkdir()
+    rows = [rec(1, "2026-01-01", "Shop", None, file="fake.pdf"),
+            rec(2, "2026-01-02", "Zero", 0, invoice_no="Z1")]
+    result = missing(rows, str(tmp_path))
+    assert result["file_not_found"] == ["row 1 2026-01-01 Shop: fake.pdf"]
+    assert result["incomplete"] == ["row 1 2026-01-01 Shop: no amount, invoice_no"]
+    income = dict(row=1, invoice_date="2026-01-01", client="X", invoice_no="1", recibo_no="2",
+                  invoice_file="fake.pdf", recibo_file="")
+    assert missing_income([income], str(tmp_path))["file_not_found"] == ["row 1 2026-01-01 X 1: fake.pdf"]
