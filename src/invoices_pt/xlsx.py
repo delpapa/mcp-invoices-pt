@@ -25,7 +25,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from . import bookmath, columns, layout
 from .config import Config
 
-END_ROW = 5000          # formulas and validation cover the table down to this row
+END_ROW = 1_048_576   # Excel's last row
+LEGACY_END_ROW = 5000
 META = "_meta"
 NUMBER_FORMATS = {"date": "dd.mm.yyyy", "num": "#,##0.00", "fx": "0.0000", "pct": "0%"}
 FILL = {"box": PatternFill("solid", fgColor="FFFBEB"), "irs": PatternFill("solid", fgColor="EDF7ED"),
@@ -68,8 +69,39 @@ class XlsxBook:
             if os.path.exists(os.path.join(folder, lock)):
                 raise WorkbookOpen(f"{name} is open in a spreadsheet program; close it and try again")
 
+    def _extend_summary_ranges(self, wb: openpyxl.Workbook) -> None:
+        """Upgrade only recognized 5,000-row summary formulas in previously generated books."""
+        for table in (self.expenses, self.income):
+            ws = table._sheet(wb)
+            old = []
+            for cells in ws.iter_rows(max_row=min(ws.max_row, 200)):
+                if cells[0].value == table.columns[table.date_field]:
+                    break
+                old.extend(c for c in cells if c.data_type == "f" and isinstance(c.value, str)
+                           and "$5000" in c.value)
+            if not old:
+                continue
+            expense, income = self.names["expenses"], self.names["income"]
+            template = (layout.expense_values(self.year, income, 0, end=LEGACY_END_ROW) if table is self.expenses
+                        else layout.income_values(self.year, expense, end=LEGACY_END_ROW))
+            known = {v for row in template for v in row if isinstance(v, str) and "$5000" in v}
+            # The original expenses header was on row 30. Its IRS/SS summary used
+            # quarter columns rather than date predicates.
+            known.update(v.replace("$34:", "$30:") for v in tuple(known))
+            if table is self.income:
+                for q in bookmath.QUARTERS:
+                    for col in ("B", "J"):
+                        known.add(f'=SUMIFS($N$7:$N$5000,${col}$7:${col}$5000,"{q}")')
+                    for head in (30, layout.EXP_HEADER_ROW):
+                        tab = expense.replace("'", "''")
+                        known.add(f'''=SUMIFS('{tab}'!$AB${head}:$AB$5000,'{tab}'!$B${head}:$B$5000,"{q}")''')
+            for cell in old:
+                if cell.value in known:
+                    cell.value = re.sub(r"(:\$[A-Z]+\$)5000\b", rf"\g<1>{END_ROW}", cell.value)
+
     def save(self, wb: openpyxl.Workbook) -> None:
         self.check_closed()
+        self._extend_summary_ranges(wb)
         wb.calculation.fullCalcOnLoad = True           # Excel / LibreOffice recalculate on open
         fd, tmp = tempfile.mkstemp(suffix=".xlsx", dir=os.path.dirname(self.path) or ".")
         os.close(fd)

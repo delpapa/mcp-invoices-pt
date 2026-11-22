@@ -266,3 +266,46 @@ def test_overlapping_sale_and_expense_cannot_overwrite_each_other(cfg, monkeypat
     assert expenses.add(expense, dry_run=False)["written"]
     assert [r["invoice_no"] for r in separate_income_client.records()] == ["S1"]
     assert [r["invoice_no"] for r in expenses.records()] == ["P1"]
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="LibreOffice not installed")
+def test_workbook_totals_include_entries_past_row_5000(cfg, tmp_path):
+    create_year(cfg, 2026, 0)
+    expenses, _ = open_books(cfg, 2026)
+    wb = expenses.book.load()
+    late = 5001
+    ws = wb["Income"]
+    for header, value in {"Invoice date": bookmath.day("2026-01-07"), "Net € (AT recibo)": 200,
+                          "IVA €": 46, "VAT case": "PT / C3", **layout.row_formulas("income", late)}.items():
+        idx = [h for h, _, _ in layout.INCOME_COLUMNS].index(header) + 1
+        ws.cell(late, idx, value)
+    wb.save(expenses.book.path)  # equivalent to entering a new sale directly in the spreadsheet
+    output = tmp_path / "recalculated"
+    subprocess.run(["soffice", f"-env:UserInstallation={(tmp_path / 'profile').as_uri()}", "--headless",
+                    "--convert-to", "xlsx", "--outdir", str(output), expenses.book.path],
+                   check=True, capture_output=True, timeout=180)
+    calculated = openpyxl.load_workbook(output / Path(expenses.book.path).name, data_only=True)
+    assert calculated["Income"]["C3"].value == 200
+    box_rows, quarters = expenses._block(calculated["Expenses"])
+    assert calculated["Expenses"].cell(box_rows[4], quarters["Q1"]).value == 46
+
+
+def test_save_upgrades_old_summary_ranges_and_preserves_custom_formulas(cfg, monkeypatch):
+    from invoices_pt import xlsx
+
+    with monkeypatch.context() as old:
+        old.setattr(xlsx, "END_ROW", 5000)
+        create_year(cfg, 2026, 0)
+    exp, _ = open_books(cfg, 2026)
+    wb = exp.book.load()
+    ws = wb["Expenses"]
+    boxes, quarters = exp._block(ws)
+    ws.cell(boxes[96], quarters["Q1"]).value = 123
+    ws["M1"] = "=SUM($J$34:$J$5000)"
+    wb.save(exp.book.path)
+    assert exp.add({"date": "2026-04-01", "invoice_no": "FT1"}, dry_run=False)["written"]
+    saved = exp.book.load()
+    assert "$1048576" in saved["Income"]["C3"].value
+    assert "$1048576" in saved["Expenses"].cell(boxes[4], quarters["Q2"]).value
+    assert saved["Expenses"].cell(boxes[96], quarters["Q1"]).value == 123
+    assert saved["Expenses"]["M1"].value == "=SUM($J$34:$J$5000)"
