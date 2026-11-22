@@ -6,16 +6,16 @@ Safety rules: never overwrite, and only ever delete files that sit in the inbox.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import os
 import shutil
+import tempfile
 
 from .config import Config
-from .documents import efatura
-from .extract import proposal, read_document
-from .ledger import Ledger, sha256
+from .documents import DOC_EXT, efatura
+from .extract import matching_documents, proposal, read_document
+from .ledger import Ledger, sha256, verified_filed_copy
 from .model import Document
-
-DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
 
 
 def target_dir(cfg: Config, doc: Document, year: int) -> str:
@@ -42,21 +42,46 @@ def index_folder(folder: str, ledger: Ledger) -> dict:
         except Exception as e:
             counts["failed"].append(f"{name}: {e}")
             continue
-        ledger.record(digest, path, doc.key if doc.invoice_no else "", doc.layer, "filed")
+        ledger.record(digest, path, doc.key, doc.layer, "filed")
         counts["indexed"] += 1
     return counts
 
 
-def _filed_copy(ledger: Ledger, digest: str, key: str) -> str | None:
+def _filed_copy(ledger: Ledger, digest: str, doc: Document | None) -> str | None:
     """Path of a filed file with the same content, or the same invoice, that still exists."""
     same = ledger.get(digest)
-    if same and same["status"] == "filed" and os.path.exists(same["path"]):
+    if verified_filed_copy(same):
         return same["path"]
-    if key and not key.endswith("|"):
-        for r in ledger.by_key(key):
-            if r["status"] == "filed" and r["sha256"] != digest and os.path.exists(r["path"]):
+    if doc is not None:
+        for r in matching_documents(doc, ledger):
+            if r["sha256"] != digest and verified_filed_copy(r):
                 return r["path"]
     return None
+
+
+def _publish_copy(source: str, dest: str, digest: str) -> None:
+    """Stage complete bytes on the archive filesystem and claim the destination exclusively."""
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(dest)) as staging:
+        staged = os.path.join(staging, "document")
+        shutil.copy2(source, staged)
+        if sha256(staged) != digest:
+            raise OSError("the source document changed while filing; retry with the current file")
+        if os.name == "nt":
+            os.rename(staged, dest)  # Windows rename refuses existing files
+            return
+        try:
+            os.link(staged, dest)
+        except OSError as exc:
+            if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.ENOSYS):
+                raise
+            # Some mounted drives do not support links. Reserve the final name first.
+            with open(dest, "xb"):
+                pass
+            try:
+                os.replace(staged, dest)
+            except BaseException:
+                os.unlink(dest)
+                raise
 
 
 def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_run: bool = True,
@@ -69,30 +94,43 @@ def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_ru
         docs = efatura.parse_csv(path)
         year = max(d.date for d in docs).year if docs else dt.date.today().year
         dest = os.path.join(cfg.paths(year)["year_root"], name or f"eFatura_{year}_export_{dt.date.today():%Y%m%d}.csv")
-        key = ""
+        doc = None
     else:
         doc = read_document(path)
         if not doc.date:
             return {"error": "no date read from the document; pass the fields to add_expense and a name to file_document"}
         year = doc.date.year
-        key = doc.key if doc.invoice_no else ""
         dest = os.path.join(target_dir(cfg, doc, year), name or proposal(doc, cfg)["file_name"])
 
-    copy = _filed_copy(ledger, digest, key)
+    key, layer = (doc.key, "document") if doc else ("", "csv")
+    copy = _filed_copy(ledger, digest, doc)
+    if not copy and os.path.isfile(dest) and sha256(dest) == digest:
+        # A prior attempt may have published the bytes before its ledger write failed.
+        copy = dest
+        if not dry_run:
+            ledger.record(digest, dest, key, layer, "filed")
     if copy and os.path.realpath(copy) == os.path.realpath(path):
         return {"status": "already_filed", "path": copy}
     if copy:
         result = {"status": "duplicate", "existing": copy, "deleted": False}
-        if delete_duplicate and in_inbox:
-            result["deleted"] = not dry_run
-            if not dry_run:
-                os.remove(path)
+        if delete_duplicate and in_inbox and not dry_run:
+            if sha256(path) != digest:
+                return {"error": "the inbox file changed while checking the duplicate; retry with the current file"}
+            os.remove(path)
+            result["deleted"] = True
         return {"dry_run": dry_run, **result}
-    if os.path.exists(dest):
-        return {"error": f"{dest} already exists and is a different document; pass another name"}
+    collision = {"error": f"{dest} already exists; pass another name"}
+    if os.path.lexists(dest):
+        return collision
     if dry_run:
         return {"dry_run": True, "status": "would_move", "to": dest}
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.move(path, dest)
-    ledger.record(digest, dest, key, "csv" if dest.endswith(".csv") else "document", "filed")
+    try:
+        _publish_copy(path, dest, digest)
+    except FileExistsError:
+        return collision
+    ledger.record(digest, dest, key, layer, "filed")
+    if sha256(path) != digest:
+        return {"error": "the source changed after its original contents were filed", "to": dest}
+    os.remove(path)
     return {"status": "moved", "to": dest}

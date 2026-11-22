@@ -7,9 +7,8 @@ import datetime as dt
 import os
 import re
 
+from .documents import DOC_EXT
 from .model import Document
-
-DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
 
 
 def _n(s) -> str:

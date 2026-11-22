@@ -6,13 +6,11 @@ import datetime as dt
 import os
 
 from .config import Config
-from .documents import efatura, text
-from .extract import expense_row, proposal, read_document
+from .documents import DOC_EXT, efatura, text
+from .extract import expense_row, matching_documents, proposal, read_document
 from .income import propose as propose_income
-from .ledger import Ledger, sha256
+from .ledger import Ledger, sha256, verified_filed_copy
 from .model import Document
-
-DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
 
 
 def scan(cfg: Config, ledger: Ledger) -> list[dict]:
@@ -42,6 +40,8 @@ def scan(cfg: Config, ledger: Ledger) -> list[dict]:
                 if looks is False:
                     kind = "not_an_invoice"
         known = ledger.get(digest)
+        if known and known["status"] == "filed" and not verified_filed_copy(known):
+            known = None
         out.append({"path": path, "kind": kind, "looks_like_invoice": looks,
                     "status": known["status"] if known else "new",
                     "filed_as": known["path"] if known and known["status"] == "filed" else "",
@@ -119,8 +119,7 @@ def plan(cfg: Config, ledger: Ledger) -> dict:
         if doc.doc_type == "sales_invoice" or (cfg.nif and doc.supplier_vat == "PT" + cfg.nif):
             (invoices if doc.doc_type == "sales_invoice" else at_docs).append(doc)
             continue
-        filed = [r for r in ledger.by_key(doc.key) if r["status"] == "filed" and os.path.exists(r["path"])] \
-            if doc.invoice_no else []
+        filed = [r for r in matching_documents(doc, ledger) if verified_filed_copy(r)]
         if filed:                                   # the same invoice downloaded again (different file bytes)
             out["copies"].append({"path": path, "same_as": filed[0]["path"]})
             continue

@@ -28,6 +28,16 @@ def sha256(path: str) -> str:
     return h.hexdigest()
 
 
+def verified_filed_copy(row: dict | None) -> bool:
+    """A ledger entry is evidence of a filed copy only while the recorded bytes still exist."""
+    if not row or row["status"] != "filed" or not os.path.isfile(row["path"]):
+        return False
+    try:
+        return sha256(row["path"]) == row["sha256"]
+    except OSError:
+        return False
+
+
 class Ledger:
     def __init__(self, path: str):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -46,7 +56,7 @@ class Ledger:
         self.db.execute(
             "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sha256) DO UPDATE SET "
             "path = excluded.path, doc_key = excluded.doc_key, layer = excluded.layer, status = excluded.status, "
-            "updated = excluded.updated",
+            "updated = excluded.updated WHERE excluded.status != 'extracted' OR documents.status = 'extracted'",
             (digest, path, doc_key, layer, status, dt.datetime.now().isoformat(timespec="seconds")),
         )
         self.db.commit()
