@@ -53,6 +53,7 @@ class Table:
     UNIQUE: tuple[str, ...] = ()        # fields that identify a row; a second row with the same value is refused
 
     def __init__(self, cfg: Config, year: int, sh: gspread.Spreadsheet | None = None):
+        self.cfg, self.year = cfg, year
         self.sh = sh or open_spreadsheet(cfg)
         self.ws = self.sh.worksheet(cfg.tab(self.KIND, year))
         self.columns = {**self.COLUMNS, **cfg.column_overrides(self.KIND)}
@@ -95,9 +96,12 @@ class Table:
         return columns.find_row(self.records(), value, field, supplier_vat, doc_type)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
+        if self.KIND == "expenses" and bookmath.expense_fx(row.get("fx")) is None:
+            return {"error": bookmath.EXPENSE_FX_ERROR}
         day = dt.date.fromisoformat(str(row[self.date_field]))
         q = quarter(day)
-        if q in self.filed_quarters() and not allow_filed:
+        filed = q in self.filed_quarters()
+        if filed and not allow_filed:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         supplier_vat = row.get("supplier_vat", "")
         doc_type = row.get("doc_type", "")
@@ -105,8 +109,15 @@ class Table:
             if row.get(field) not in (None, "") and (dup := self.find(row[field], field, supplier_vat, doc_type)):
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         head, idx, values = self._table()
-        if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
-            return {"error": error}
+        case = (row.get("vat_case") or "").strip().upper()
+        if self.KIND == "income" and case in ("PT / C1", "PT / C5"):
+            expenses = ExpenseSheet(self.cfg, self.year, self.sh)
+            _, formulas, boxes, quarters = expenses._block()
+            col = quarters[q]
+            cells = {int(b): (gspread.utils.rowcol_to_a1(i + 1, col + 1),
+                              formulas[i][col] if col < len(formulas[i]) else "") for b, i in boxes.items()}
+            if error := layout.sales_layout_error(case, idx, cells, filed):
+                return {"error": error}
         mapped = columns.table_fields(self.columns, idx)
         cells = {mapped[k]: v for k, v in row.items() if k in mapped and v not in (None, "")}
         if dry_run:
@@ -175,10 +186,6 @@ class ExpenseSheet(Table):
     COLUMNS = columns.EXPENSE_FIELDS
     TEXT_FIELDS = columns.TEXT_FIELDS["expenses"]
     UNIQUE = columns.UNIQUE["expenses"]
-
-    def __init__(self, cfg: Config, year: int, sh: gspread.Spreadsheet | None = None):
-        super().__init__(cfg, year, sh)
-        self.cfg, self.year = cfg, year
 
     # ---- the "Declaração Periódica" block above the table: rows "Box n", one column per quarter
     def _block(self) -> tuple[list[list], list[list], dict[str, int], dict[str, int]]:

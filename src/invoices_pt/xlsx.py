@@ -138,12 +138,15 @@ class XlsxTable:
         return str(v)
 
     def add(self, row: dict, dry_run: bool = True, allow_filed: bool = False) -> dict:
+        if self.KIND == "expenses" and bookmath.expense_fx(row.get("fx")) is None:
+            return {"error": bookmath.EXPENSE_FX_ERROR}
         day = bookmath.day(row[self.date_field])
         if not day:
             return {"error": f"{self.date_field} must be a date (YYYY-MM-DD)"}
         q = bookmath.quarter(day)
         wb = self.book.load()
-        if q in XlsxBook.filed(wb) and not allow_filed:
+        filed = q in XlsxBook.filed(wb)
+        if filed and not allow_filed:
             return {"error": f"{q} is filed and locked; pass allow_filed only for a deliberate correction"}
         recs = self._records(wb)
         for field in columns.UNIQUE[self.KIND]:
@@ -152,8 +155,17 @@ class XlsxTable:
                 return {"error": f"{field} {row[field]} is already in row {dup}"}
         ws = self._sheet(wb)
         head, idx = self._header(ws)
-        if self.KIND == "income" and (error := layout.sales_layout_error(row, idx)):
-            return {"error": error}
+        case = (row.get("vat_case") or "").strip().upper()
+        if self.KIND == "income" and case in ("PT / C1", "PT / C5"):
+            expenses = self.book.expenses
+            exp_ws = expenses._sheet(wb)
+            boxes, quarters = expenses._block(exp_ws)
+            cells = {}
+            for box, r in boxes.items():
+                cell = exp_ws.cell(r, quarters[q])
+                cells[box] = (cell.coordinate, cell.value)
+            if error := layout.sales_layout_error(case, idx, cells, filed):
+                return {"error": error}
         mapped = columns.table_fields(self.columns, idx)
         cells = {mapped[k]: v for k, v in row.items() if k in mapped and v not in (None, "")}
         if dry_run:

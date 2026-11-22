@@ -72,8 +72,14 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
     if at_doc and at_doc.file:
         names["recibo"] = cfg.income_name("recibo", invoice_date, name_no, os.path.splitext(at_doc.file)[1] or ".pdf")
     case = vat_case(vat_eur, _f(extra.get("not_subject")), country, extra=extra, net_eur=net_eur)
-    if vat_eur > 0 and not case:
-        checks.append("the AT amounts do not identify a single mainland IVA rate; review the rate breakdown before booking")
+    client_case = rule.get("vat_case")
+    if vat_eur > 0:
+        if not case:
+            checks.append("the AT amounts do not identify a single mainland IVA rate; review the rate breakdown before booking")
+        elif client_case and client_case != case:
+            checks.append(f"the AT document shows {case}; check the client rule specifying {client_case}")
+    else:
+        case = client_case or case
     row = {
         "invoice_date": invoice_date.isoformat() if invoice_date else "",
         "client": rule.get("name") or client_text,
@@ -89,7 +95,7 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "vat_rate": round(vat_eur / net_eur * 100) if net_eur else 0,
         "vat_eur": vat_eur,
         "withheld": withheld,
-        "vat_case": rule.get("vat_case") or case,
+        "vat_case": case,
         "invoice_file": names.get("invoice", ""),
         "recibo_file": names.get("recibo", ""),
         "account": rule.get("account", ""),

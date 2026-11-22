@@ -8,6 +8,7 @@ so both agree to the cent.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -69,6 +70,16 @@ def quarter(v) -> str:
     return f"Q{(d.month - 1) // 3 + 1}" if d else ""
 
 
+EXPENSE_FX_ERROR = "fx must be a positive finite exchange rate; leave blank for 1"
+
+
+def expense_fx(value) -> float | None:
+    if value in (None, ""):
+        return 1.0
+    rate = num(value)
+    return rate if rate is not None and math.isfinite(rate) and rate > 0 else None
+
+
 def expense_row(rec: dict) -> dict:
     """Computed columns of one expense row, as the sheet formulas compute them."""
     amount = num(rec.get("amount"))
@@ -79,7 +90,10 @@ def expense_row(rec: dict) -> dict:
     # Preserve decimal half-cents through subtraction and multiplication before ROUND.
     amount = Decimal(str(amount))
     vat_incl = Decimal(str(num(rec.get("vat_included")) or 0))
-    fx = Decimal(str(num(rec.get("fx")) or 1))
+    rate = expense_fx(rec.get("fx"))
+    if rate is None:
+        raise ValueError(f"Expense row {rec.get('row', '?')}: {EXPENSE_FX_ERROR}")
+    fx = Decimal(str(rate))
     share = num(rec.get("business_pct"))
     biz = Decimal(str(share)) if share is not None else Decimal(1)
     code = (rec.get("code") or "").strip().upper()

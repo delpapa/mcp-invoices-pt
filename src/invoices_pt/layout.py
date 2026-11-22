@@ -7,6 +7,8 @@ row per sale. VAT maths are sheet formulas, so the sheet stays readable and edit
 
 from __future__ import annotations
 
+import re
+
 from .vat import CODES, EU, NORMAL_RATE, RESULT_SUMS, REVERSE_CHARGE_BOXES, SALES_BOXES, SALES_CODES
 
 EU_ARRAY = "{" + ",".join(f'"{c}"' for c in sorted(EU)) + "}"
@@ -28,6 +30,7 @@ def _region(col: str) -> str:
     return f'=IF({col}{{r}}="","",IF({col}{{r}}="PT","PT",IF(ISNUMBER(MATCH({col}{{r}},{eu},0)),"EU","OutEU")))'
 
 
+EXPENSE_FX = 'IF(L{r}="",1,IF(L{r}>0,L{r},NA()))'
 BUSINESS_SHARE = 'IF(Q{r}="",1,Q{r})'
 REVERSE_CHARGE_COLUMNS = []
 for code, (base_box, vat_box) in REVERSE_CHARGE_BOXES.items():
@@ -42,8 +45,8 @@ EXPENSE_COLUMNS = [
     ("Date", None, "date"), ("Q", _q("A"), ""), ("Expense", None, ""), ("Supplier", None, ""),
     ("Country", None, ""), ("Region", _region("E"), ""), ("VAT", None, ""), ("Invoice no.", None, ""),
     ("Currency", None, ""), ("Amount paid", None, "num"), ("VAT included", None, "num"), ("FX to EUR", None, "fx"),
-    ("Amount €", '=IF(J{r}="","",ROUND(J{r}/IF(L{r}="",1,L{r}),2))', "num"),
-    ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/IF(L{r}="",1,L{r}),2))', "num"),
+    ("Amount €", '=IF(J{r}="","",ROUND(J{r}/' + EXPENSE_FX + ',2))', "num"),
+    ("Net € (-VAT)", '=IF(J{r}="","",ROUND((J{r}-N(K{r}))/' + EXPENSE_FX + ',2))', "num"),
     ("NIF?", None, ""), ("VAT code", None, ""), ("Business %", None, "pct"),
     *REVERSE_CHARGE_COLUMNS,
     ("Box 20", '=IF(TRIM(P{r})="PT-ASSET",ROUND((M{r}-N{r})*' + BUSINESS_SHARE + ',2),0)', "num"),
@@ -93,11 +96,26 @@ def row_formulas(kind: str, r: int) -> dict[str, str]:
     return {h: f.format(r=r) for h, f, _ in cols if f}
 
 
-def sales_layout_error(row: dict, headers: dict) -> str | None:
-    """Older books have no formulas for reduced and intermediate rate sales."""
-    case = (row.get("vat_case") or "").strip().upper()
-    if case in ("PT / C1", "PT / C5") and any(f"Box {b}" not in headers for b in SALES_BOXES[case]):
-        return f"{case} requires the updated income columns and declaration block; upgrade the workbook layout first"
+def sales_layout_error(case: str, headers: dict, cells: dict, frozen: bool) -> str | None:
+    """Check both tabs of a book before accepting a sale using the newer fields.
+
+    cells maps each declaration box to its A1 address and its formula or frozen value.
+    The old template totals are simple additions of cell references. Check these
+    directly while leaving custom formulas to the workbook owner.
+    """
+    message = f"{case} requires the updated income columns and declaration formulas; upgrade the workbook layout first"
+    for box, total in zip(SALES_BOXES[case], (90, 92)):
+        if f"Box {box}" not in headers or box not in cells or total not in cells:
+            return message
+        if frozen:
+            continue
+        address, formula = cells[box]
+        total_formula = str(cells[total][1]).replace("$", "").replace(" ", "").upper()
+        if not str(formula).startswith("=") or not total_formula.startswith("="):
+            return message
+        if re.fullmatch(r"=[A-Z]+[0-9]+(?:\+[A-Z]+[0-9]+)*", total_formula):
+            if address not in total_formula[1:].split("+"):
+                return message
     return None
 
 

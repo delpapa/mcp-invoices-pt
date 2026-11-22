@@ -5,6 +5,7 @@ import openpyxl
 import pytest
 
 from invoices_pt import bookmath, layout
+from invoices_pt.xlsx import XlsxBook
 
 # (code, work share, deductible IVA box, deductible IVA, IRS cost)
 CASES = [
@@ -42,3 +43,13 @@ def test_expense_formulas_match_hand_calculated_rows(tmp_path):
     for rn, (_, _, box, vat, irs) in enumerate(CASES, 1):
         assert calculated.cell(rn, headers.index(f"Box {box}") + 1).value == vat
         assert calculated.cell(rn, headers.index("IRS deductible € (Anexo B)") + 1).value == irs
+
+
+@pytest.mark.parametrize("rate", [0, -2, "NaN", "unavailable"])
+def test_invalid_expense_fx(cfg, rate):
+    row = {"date": "2026-01-01", "amount": 20, "fx": rate}
+    with pytest.raises(ValueError, match="fx must be a positive finite"):
+        bookmath.expense_row(row)
+    # Validation precedes workbook access in dry runs and writes.
+    expenses = XlsxBook(cfg, 2026).expenses
+    assert expenses.add(row, dry_run=False) == {"error": bookmath.EXPENSE_FX_ERROR}

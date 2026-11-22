@@ -118,3 +118,23 @@ def test_old_income_layout_refuses_unsupported_sales_before_writing(tmp_path):
     assert "upgrade" in inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C1"), dry_run=False)["error"]
     assert inc.records() == []
     assert inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C3"), dry_run=False)["written"]
+
+
+@pytest.mark.parametrize("legacy", ["missing box", "stale total 90", "stale total 92"])
+def test_partial_layout_upgrade_cannot_omit_reduced_sale_from_return(tmp_path, legacy):
+    cfg = Config({"paths": {"year_root": str(tmp_path / "{year}")}})
+    create_year(cfg, 2099, 0.0)
+    exp, inc = open_books(cfg, 2099)
+    wb = inc.book.load()
+    ws = wb["Expenses"]
+    boxes, cols = exp._block(ws)
+    if legacy == "missing box":
+        ws.cell(boxes[1], 1).value = None
+    else:
+        total = int(legacy.split()[-1])
+        old_fields = (3, 7, 8, 12, 16) if total == 90 else (4, 13, 17)
+        ws.cell(boxes[total], cols["Q1"]).value = "=" + "+".join(f"E{boxes[b]}" for b in old_fields)
+    inc.book.save(wb)
+    result = inc.add(dict(invoice_date="2099-01-01", vat_case="PT / C1"), dry_run=False)
+    assert "upgrade" in result["error"]
+    assert inc.records() == []

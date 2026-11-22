@@ -86,13 +86,16 @@ def test_missing_income(tmp_path):
 def test_propose_uses_printed_sale_rate(qr_png, cfg, base_field, vat_field, tax, rate, case):
     payload = PT_SALE.replace("I7:", base_field + ":").replace("I8:", vat_field + ":")
     payload = payload.replace("115.00", str(tax)).replace("615.00", str(500 + tax))
-    result = propose(cfg, None, at_doc(qr_png, payload))
+    cfg = Config({**cfg.data, "clients": [{"match": "Example Client", "vat_case": "PT / C3"}]})
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
+    assert any("client rule" in check for check in result["checks"])
     assert result["row"]["vat_case"] == case
     assert result["row"]["vat_rate"] == rate
 
 
 def test_mixed_rate_sale_needs_review(qr_png, cfg):
     payload = PT_SALE.replace("N:115.00*O:615.00", "I3:100.00*I4:6.00*N:121.00*O:721.00")
-    result = propose(cfg, None, at_doc(qr_png, payload))
+    cfg = Config({**cfg.data, "clients": [{"match": "Example Client", "vat_case": "PT / C3"}]})
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
     assert result["row"]["vat_case"] == ""
     assert any("rate breakdown" in check for check in result["checks"])

@@ -257,8 +257,14 @@ supplier VAT ID and invoice number.
 | `NON-EU / C8` | Client outside the EU, no IVA | 8 |
 
 Each income row supports one VAT case. Review sales with multiple rates before booking them. Books created
-with the older layout need income columns and declaration rows for boxes 1, 2, 5 and 6 before booking
-reduced or intermediate rates. Check previously booked sales classified as `PT / C3` against the printed rate.
+with the older layout need income columns and declaration rows for boxes 1, 2, 5 and 6, plus updated formulas
+for totals 90 and 92. Check previously booked `PT / C3` sales against their printed rate.
+
+For an existing year, keep the original books and make a copy of your config. In the copy, set
+`paths.workbook` to a new filename (or use new `google.expenses_tab` and `google.income_tab` names).
+Use `create_year_sheet` with the same year and opening credit. Book the original input rows into the
+new template so it generates their formulas. Restore previously filed quarters from their submitted
+returns with `mark_filed`, then compare the quarterly totals and carried credit before switching books.
 
 Box numbers follow the Declaração Periódica in force for periods **before 1 July 2027**. Portaria 298/2026 changes
 the return after that, and this project will follow.
