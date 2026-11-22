@@ -10,7 +10,7 @@ from .documents.text import pdf_text
 # Boxes of quadro 06 / 06-A and the result fields
 KNOWN = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 40, 41,
          61, 65, 66, 67, 68, 90, 91, 92, 93, 94, 95, 96, 97, 98, 106}
-PAIR = re.compile(r"(?<![\d.,])(\d{1,3})\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})(?![\d,])")
+PAIR = re.compile(r"(?<![\d.,])(\d{1,3})\s+(-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d{2})(?![\d,])")
 
 
 def _pt_number(s: str) -> float:
@@ -35,14 +35,19 @@ def parse_return_pdf(path: str) -> dict[int, float]:
 
 
 def find_return_pdf(folder: str, quarter: str, year: int) -> str | None:
-    """Most likely submitted return for a quarter in a folder: a substitution wins over the original,
-    then the newest file. Matches names with IVA and the quarter, e.g. IVA_2026_1TRI_....pdf or IVA_2026_Q1_....pdf."""
+    """Prefer a return labelled with the requested year, then a substitution, then the newest file.
+    Older names with just IVA and a quarter are supported in the year's own folder."""
+    if not re.fullmatch(r"Q[1-4]", quarter, re.I) or not os.path.isdir(folder):
+        return None
     n = quarter[1]
-    rx = re.compile(rf"IVA.*(?:\b|_)({n}\s*TRI|Q{n}\b|Q{n}_|{n}Tri)", re.I)
-    if not os.path.isdir(folder):
-        return None
-    hits = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(".pdf") and rx.search(f)]
-    if not hits:
-        return None
-    hits.sort(key=lambda p: ("SUBSTIT" in os.path.basename(p).upper(), os.path.getmtime(p)), reverse=True)
-    return hits[0]
+    period = re.compile(rf"IVA.*?(?<![a-z0-9])(?:{n}\s*TRI(?:MESTRE)?|Q{n})(?![a-z0-9])", re.I)
+    hits = []
+    with os.scandir(folder) as entries:
+        for entry in entries:
+            if not entry.name.lower().endswith(".pdf") or not period.search(entry.name) or not entry.is_file():
+                continue
+            labelled = re.search(r"(?<!\d)((?:19|20)\d{2})(?!\d)", entry.name)
+            if labelled and int(labelled[1]) != year:
+                continue
+            hits.append((bool(labelled), "SUBSTIT" in entry.name.upper(), entry.stat().st_mtime, entry.path))
+    return max(hits)[-1] if hits else None

@@ -274,7 +274,7 @@ class XlsxExpenses(XlsxTable):
                 ws.cell(boxes[int(b)], quarters[q]).value = v
         self.book.save(wb)
 
-    def freeze(self, q: str, dry_run: bool = True) -> dict:
+    def freeze(self, q: str, dry_run: bool = True, box_values: dict[int, float] | None = None) -> dict:
         wb = self.book.load()
         all_q, filed = self._declaration(wb)
         exp_rows = [r["row"] for r in self._records(wb) if r["quarter"] == q]
@@ -286,9 +286,10 @@ class XlsxExpenses(XlsxTable):
             return {"dry_run": True, **plan}
         ws = self._sheet(wb)
         boxes, quarters = self._block(ws)
+        amounts = {**all_q[q], **(box_values or {})}
         for b, r in boxes.items():
             cell = ws.cell(r, quarters[q])
-            cell.value = all_q[q].get(b, 0.0)
+            cell.value = amounts.get(b, 0.0)
             cell.fill = FILL["filed"]
         if META not in wb.sheetnames:
             wb.create_sheet(META).sheet_state = "hidden"

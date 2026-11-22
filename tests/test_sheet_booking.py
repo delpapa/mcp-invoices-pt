@@ -81,3 +81,42 @@ def test_atomic_request_preserves_types_formulas_and_sort(expenses, template):
     else:
         assert not copies
         assert cells["Q"]["userEnteredValue"] == {"formulaValue": layout.row_formulas("expenses", 2)["Q"]}
+
+
+def test_quarter_with_no_sales_still_locks_income():
+    pytest.importorskip("gspread")
+    from invoices_pt.sheet import IncomeSheet
+
+    spreadsheet = Mock()
+    tabs = {title: Mock(id=sid) for title, sid in (("Income 2026", 11), ("Expenses 2026", 12))}
+    spreadsheet.worksheet.side_effect = tabs.__getitem__
+    cfg = Config({"google": {"income_tab": "Income {year}", "expenses_tab": "Expenses {year}"}})
+    income = IncomeSheet(cfg, 2026, spreadsheet)
+    spreadsheet.fetch_sheet_metadata.return_value = {"sheets": [
+        {"protectedRanges": [{"range": {"sheetId": 12}, "description": "Q1 filed: declaration values"},
+                             {"range": {"sheetId": 3}, "description": "Q2 filed: declaration values"}]}]}
+    assert income.filed_quarters() == {"Q1"}
+    assert "locked" in income.add({"invoice_date": "2026-01-15"}, dry_run=False)["error"]
+    spreadsheet.batch_update.assert_not_called()
+
+
+def test_freeze_commits_submitted_values_and_protections_in_one_request(expenses, monkeypatch):
+    from invoices_pt import sheet
+
+    expenses._block = Mock(return_value=([["Box 96", 10]], [["Box 96", "=10"]], {"96": 0}, {"Q1": 1}))
+    expenses.records = Mock(return_value=[])
+    expenses._table = Mock(return_value=(1, {"Date": 0}, []))
+    income = Mock()
+    income._table.return_value = (1, {"Date": 0}, [])
+    income.records.return_value = []
+    monkeypatch.setattr(sheet, "IncomeSheet", Mock(return_value=income))
+    assert expenses.freeze("Q1", dry_run=True, box_values={96: 20})["dry_run"]
+    expenses.sh.batch_update.assert_not_called()
+    assert expenses.freeze("Q1", dry_run=False, box_values={96: 20})["frozen"]
+    expenses.ws.update.assert_not_called()
+    expenses.sh.batch_update.assert_called_once()
+    requests = expenses.sh.batch_update.call_args.args[0]["requests"]
+    updates = [r["updateCells"] for r in requests if "updateCells" in r]
+    assert updates[0]["rows"][0]["values"][0]["userEnteredValue"] == {"numberValue": 20}
+    assert updates[0]["start"] == {"sheetId": 17, "rowIndex": 0, "columnIndex": 1}
+    assert any("addProtectedRange" in r for r in requests)

@@ -204,13 +204,18 @@ def mark_filed(quarter: str, year: int, return_pdf: str = "", dry_run: bool = Tr
     shown = {b["box"]: b["value"] for b in sheet.declaration(q)["boxes"]}
     pdf = return_pdf or find_return_pdf(cfg.paths(year)["year_root"], q, year)
     diffs = []
+    overrides = {}
     if pdf:
         submitted = parse_return_pdf(pdf)
         diffs = [{"box": b, "sheet": shown[b], "submitted": v} for b, v in sorted(submitted.items())
-                 if b in shown and abs((shown[b] or 0) - v) > 0.005]
-    result = {"freeze": sheet.freeze(q, dry_run=dry_run), "return_pdf": pdf or "not found", "differences": diffs}
+                 if b in shown and (shown[b] is None or abs(shown[b] - v) > 0.005)]
+        if apply_pdf_values:
+            overrides = {b: v for b, v in submitted.items() if b in shown}
+    if apply_pdf_values and not overrides:
+        return {"error": "Cannot apply submitted values without a return PDF containing recognized boxes",
+                "return_pdf": pdf or "not found"}
+    result = {"freeze": sheet.freeze(q, dry_run=dry_run, box_values=overrides), "return_pdf": pdf or "not found", "differences": diffs}
     if diffs and apply_pdf_values and not dry_run:
-        sheet.set_declaration(q, {d["box"]: d["submitted"] for d in diffs})
         result["applied_pdf_values"] = True
     return result
 

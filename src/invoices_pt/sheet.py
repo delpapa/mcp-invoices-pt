@@ -99,7 +99,11 @@ class Table:
         return [p for s in meta["sheets"] for p in s.get("protectedRanges", [])]
 
     def filed_quarters(self) -> set[str]:
-        return {m.group(1) for p in self._protections() if p["range"]["sheetId"] == self.ws.id
+        # A quarter is filed even when it had no sales and hence no protected income rows.
+        sheet_ids = {self.ws.id}
+        if self.KIND == "income":
+            sheet_ids.add(self.sh.worksheet(self.cfg.tab("expenses", self.year)).id)
+        return {m.group(1) for p in self._protections() if p["range"]["sheetId"] in sheet_ids
                 and (m := re.match(r"^(Q\d) filed", p.get("description", "")))}
 
     def find(self, value: str, field: str = "invoice_no", supplier_vat: str = "", doc_type: str = "") -> int | None:
@@ -238,7 +242,7 @@ class ExpenseSheet(Table):
         self.ws.batch_update([{"range": gspread.utils.rowcol_to_a1(boxes[str(b)] + 1, j + 1), "values": [[v]]}
                               for b, v in box_values.items() if str(b) in boxes], value_input_option="RAW")
 
-    def freeze(self, q: str, dry_run: bool = True) -> dict:
+    def freeze(self, q: str, dry_run: bool = True, box_values: dict[int, float] | None = None) -> dict:
         """Mark a quarter filed: fixed values in the block, greyed, and warning-only protection on the block column,
         that quarter's expense rows and its income rows."""
         values, formulas, boxes, quarters = self._block()
@@ -252,16 +256,27 @@ class ExpenseSheet(Table):
         have = {(p["range"]["sheetId"], p.get("description", "")) for p in self._protections()}
         plan = {"quarter": q, "formulas_to_freeze": len(live), "expense_rows": _span(exp_rows),
                 "income_rows": _span(inc_rows), "already_filed": q in self.filed_quarters()}
+        reqs = []
+        overrides = box_values or {}
+        for box, i in boxes.items():
+            if int(box) in overrides:
+                amount = overrides[int(box)]
+            elif i in live:
+                amount = bookmath.num(values[i][j]) if j < len(values[i]) else None
+                if amount is None:
+                    raise ValueError(f"Cannot freeze {q} box {box}: the formula has no numeric result")
+            else:
+                continue
+            reqs.append({"updateCells": {
+                "start": {"sheetId": self.ws.id, "rowIndex": i, "columnIndex": j},
+                "rows": [{"values": [{"userEnteredValue": {"numberValue": amount}}]}],
+                "fields": "userEnteredValue"}})
         if dry_run:
             return {"dry_run": True, **plan}
-        if live:
-            snap = self.ws.get(f"{_col(j)}{first + 1}:{_col(j)}{last + 1}", value_render_option="UNFORMATTED_VALUE")
-            self.ws.update(values=[[r[0] if r else ""] for r in snap], range_name=f"{_col(j)}{first + 1}:{_col(j)}{last + 1}",
-                           value_input_option="RAW")
-        reqs = [{"repeatCell": {"range": {"sheetId": self.ws.id, "startRowIndex": first, "endRowIndex": last + 1,
-                                          "startColumnIndex": j, "endColumnIndex": j + 1},
-                                "cell": {"userEnteredFormat": {"backgroundColor": GREY}},
-                                "fields": "userEnteredFormat.backgroundColor"}}]
+        reqs.append({"repeatCell": {
+            "range": {"sheetId": self.ws.id, "startRowIndex": first, "endRowIndex": last + 1,
+                      "startColumnIndex": j, "endColumnIndex": j + 1},
+            "cell": {"userEnteredFormat": {"backgroundColor": GREY}}, "fields": "userEnteredFormat.backgroundColor"}})
         width = max(self._table()[1].values()) + 1
         for desc, sid, r0, r1, c0, c1 in [
                 (f"{q} filed: declaration values", self.ws.id, first, last + 1, j, j + 1),
