@@ -12,12 +12,10 @@ import shutil
 import tempfile
 
 from .config import Config
-from .documents import efatura
+from .documents import DOC_EXT, efatura
 from .extract import matching_documents, proposal, read_document
 from .ledger import Ledger, sha256, verified_filed_copy
 from .model import Document
-
-DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
 
 
 def target_dir(cfg: Config, doc: Document, year: int) -> str:
