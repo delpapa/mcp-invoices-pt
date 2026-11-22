@@ -201,7 +201,11 @@ Excel, LibreOffice or Numbers. A **Google Sheet** is an option: set `backend: go
 **Income sheet**
 - **IRS & SS**, per quarter:
   - gross income by invoice date, for IRS Anexo B;
-  - income by recibo date, for the quarterly Segurança Social declaration;
+  - income received in the calendar year, by recibo date, for sales recorded in this book.
+    The `income_totals` tool also checks earlier income books matching the configured workbook paths or
+    Google tab names. For example, a December invoice paid in January contributes to January’s quarter.
+    The requested year’s books must exist. Include any receipts from archived books outside that configuration
+    when preparing the Segurança Social declaration;
   - business expenses.
 - **The table**, one row per sale.
 
@@ -386,6 +390,11 @@ copy.
   plan checks the dates, amounts and available client tax IDs. If several documents fit, the plan lists them
   under `needs_reading` with their possible matches. Once you identify a pair, pass both files to
   `propose_income`. The row keeps both documents and the exchange rate implied by their gross totals.
+- **Payment after invoicing.** A Portal fatura (FT/FS) supplies the invoice date. A recibo (RG/RC) or
+  fatura-recibo (FR) supplies the payment date used for Segurança Social. When a separate recibo arrives,
+  find the invoice in your income books, including earlier years. If the sale was already booked and the
+  receipt settles it in full, enter the receipt number, date and file on that row by hand. Keep its invoice
+  date and amount. Adding another income row for the receipt would count the sale twice.
 
 ### Type the return
 

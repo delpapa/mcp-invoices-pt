@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 
+from . import bookmath
 from .config import Config
 
 
@@ -25,6 +27,64 @@ def where(cfg: Config, year: int) -> str:
     if cfg.backend == "google":
         return f"Google Sheet {cfg.google.get('spreadsheet_id', '')}, tabs {cfg.sheet_name('expenses', year)} / {cfg.sheet_name('income', year)}"
     return cfg.workbook(year)
+
+
+def _receipt_rows(cfg: Config, year: int, income):
+    """Yield receipt dates and amounts from each distinct configured income table through year."""
+    if cfg.backend == "google":
+        from .sheet import IncomeSheet
+        titles = {w.title for w in income.sh.worksheets()}
+        seen = set()
+        for y in range(year, 0, -1):
+            title = cfg.tab("income", y)
+            if title in titles and title not in seen:
+                seen.add(title)
+                table = income if y == year else IncomeSheet(cfg, y, income.sh)
+                yield from table.receipts()
+        return
+
+    from .xlsx import XlsxBook
+    current_path = Path(cfg.workbook(year)).absolute()
+    previous_path = Path(cfg.workbook(year - 1)).absolute()
+    # List the first year-dependent component once. Only probe paths whose directory
+    # entry actually exists (including older years separated by gaps).
+    if current_path == previous_path:
+        wb = income.book.load()
+        try:
+            titles = set(wb.sheetnames)
+            for y in range(year, 0, -1):
+                title = cfg.sheet_name("income", y)
+                if title in titles:
+                    titles.remove(title)
+                    yield from XlsxBook(cfg, y).income._records(wb)
+        finally:
+            wb.close()
+        return
+    parent = Path(os.path.commonpath([current_path, previous_path]))
+    entries = set(os.listdir(parent))
+    for y in range(year, 0, -1):
+        path = Path(cfg.workbook(y)).absolute()
+        if path.relative_to(parent).parts[0] not in entries:
+            continue
+        try:
+            path.stat()
+        except FileNotFoundError:
+            continue
+        yield from XlsxBook(cfg, y).income.records()
+
+
+def annual_income_totals(cfg: Config, year: int) -> list[dict]:
+    """Keep the book's IRS/custom summaries; consolidate receipts by actual payment date."""
+    _, income = open_books(cfg, year)
+    summary = income.summary()
+    receipts = bookmath.receipt_totals(_receipt_rows(cfg, year, income), year)
+    for i, row in enumerate(summary):
+        if row["item"] in (bookmath.RECEIPT_TOTAL, bookmath.RECEIPT_TOTAL + " — this book"):
+            summary[i] = receipts
+            break
+    else:
+        summary.append(receipts)
+    return summary
 
 
 def opening_credit(cfg: Config, year: int) -> float:

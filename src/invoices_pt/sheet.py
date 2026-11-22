@@ -175,6 +175,17 @@ class IncomeSheet(Table):
     COLUMNS = columns.INCOME_FIELDS
     UNIQUE = columns.UNIQUE["income"]
 
+    def receipts(self):
+        """Read date serials and monetary values without display-locale conversion."""
+        head, idx, rows = self._table("UNFORMATTED_VALUE")
+        date_col, amount_col = (idx[self.columns[k].strip()] for k in ("recibo_date", "net_eur"))
+        for r in rows[head:]:
+            if len(r) > max(date_col, amount_col):
+                date = r[date_col]
+                if isinstance(date, (int, float)):
+                    date = dt.date(1899, 12, 30) + dt.timedelta(days=int(date))
+                yield {"recibo_date": date, "net_eur": r[amount_col]}
+
     def summary(self) -> list[dict]:
         """The rows above the table (IRS and Segurança Social totals): label and the values per quarter."""
         head, _, values = self._table(value_render_option="UNFORMATTED_VALUE")

@@ -225,13 +225,23 @@ def expense_values(year: int, income_tab: str, opening_credit: float, end: int |
 
 def income_values(year: int, expenses_tab: str, end: int | None = None) -> list[list]:
     expenses_tab = expenses_tab.replace("'", "''")
-    irs, e = expense_letter("IRS deductible € (Anexo B)"), _end(end)
-    exp_sum = lambda q: f"=SUMIFS('{expenses_tab}'!${irs}${EXP_HEADER_ROW}:${irs}{e},'{expenses_tab}'!$B${EXP_HEADER_ROW}:$B{e},\"{q}\")"
-    inc_sum = lambda col, qcol, q: f'=SUMIFS(${col}${INC_HEADER_ROW}:${col}{e},${qcol}${INC_HEADER_ROW}:${qcol}{e},"{q}")'
+    e = _end(end)
+
+    def period_sum(amount: str, date: str, start_row: int, quarter: str, tab: str = "") -> str:
+        prefix = f"'{tab}'!" if tab else ""
+        values = f"{prefix}${amount}${start_row}:${amount}{e}"
+        dates = f"{prefix}${date}${start_row}:${date}{e}"
+        month = 3 * int(quarter[1]) - 2
+        return (f'=SUMIFS({values},{dates},">="&DATE({year},{month},1),'
+                f'{dates},"<"&DATE({year},{month + 3},1))')
+
     rows: list[list] = [[f"INCOME {year}"], ["IRS & SS", "", *QUARTER_COLS, str(year)]]
-    for label, f in [("Gross income € (IRS Anexo B, by invoice date)", lambda q: inc_sum("N", "B", q)),
-                     ("Income € by recibo date (Segurança Social quarterly declaration)", lambda q: inc_sum("N", "J", q)),
-                     ("Business expenses € (IRS deductible, Anexo B quadro 17 if used)", exp_sum)]:
+    for label, f in [("Gross income € (IRS Anexo B, by invoice date)", lambda q: period_sum("N", "A", INC_HEADER_ROW, q)),
+                     ("Income € by recibo date (Segurança Social quarterly declaration) — this book",
+                      lambda q: period_sum("N", "I", INC_HEADER_ROW, q)),
+                     ("Business expenses € (IRS deductible, Anexo B quadro 17 if used)",
+                      lambda q: period_sum(expense_letter("IRS deductible € (Anexo B)"), "A",
+                                           EXP_HEADER_ROW, q, expenses_tab))]:
         n = len(rows) + 1
         rows.append([label, ""] + [f(q) for q in QUARTER_COLS] + [f"=SUM(C{n}:F{n})"])
     while len(rows) < INC_HEADER_ROW - 1:

@@ -2,6 +2,7 @@ import datetime as dt
 
 import pytest
 
+from invoices_pt import bookmath
 from invoices_pt.config import Config
 from invoices_pt.documents import qr
 from invoices_pt.income import propose
@@ -124,3 +125,33 @@ def test_mixed_rate_sale_needs_review(qr_png, cfg):
     result = propose(cfg, invoice(), at_doc(qr_png, payload))
     assert result["row"]["vat_case"] == ""
     assert any("rate breakdown" in check for check in result["checks"])
+
+@pytest.mark.parametrize("kind", ["FT", "FS", "FR", "RG"])
+def test_at_document_only_recognizes_payments_on_receipts(qr_png, cfg, kind):
+    payload = PT_SALE.replace("D:FR", f"D:{kind}").replace("G:FR", f"G:{kind}")
+    result = propose(cfg, None, at_doc(qr_png, payload))
+    row = result["row"]
+    gross, received, _ = bookmath.income_totals([], [row], 2026)
+    assert gross["Q1"] == 500
+    if kind in ("FR", "RG"):
+        assert received["Q1"] == 500
+        check_existing = any("existing row" in check for check in result["checks"])
+        assert check_existing == (kind == "RG")
+        assert row["recibo_no"] == f"{kind} A1/3" and row["recibo_date"] == "2026-03-05"
+        assert row["recibo_file"] == result["file_names"]["recibo"]
+    else:
+        assert received["Q1"] == 0
+        assert row["recibo_date"] == row["recibo_no"] == row["recibo_file"] == ""
+        assert row["invoice_no"] == f"{kind} A1/3"
+        assert row["invoice_file"] == result["file_names"]["invoice"]
+        assert any("no receipt" in check for check in result["checks"])
+
+
+def test_paired_unpaid_invoices_preserve_both_attachments(qr_png, cfg):
+    payload = PT_SALE.replace("D:FR", "D:FT").replace("G:FR", "G:FT")
+    result = propose(cfg, invoice(), at_doc(qr_png, payload))
+    row = result["row"]
+    assert row["recibo_date"] == row["recibo_no"] == ""
+    assert row["invoice_file"] == result["file_names"]["invoice"]
+    assert row["recibo_file"] == result["file_names"]["at_document"]
+    assert row["invoice_file"] != row["recibo_file"]

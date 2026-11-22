@@ -94,13 +94,30 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         checks.append("no invoice date read; give the issue date before booking")
     if at_doc and not at_doc.date and invoice:
         checks.append("no date read from the AT document; check its issue date")
-    invoice_no = invoice.invoice_no if invoice else ""
+    receipt = at_doc if at_doc and at_doc.doc_type in ("receipt", "invoice_receipt") else None
+    invoice_no = invoice.invoice_no if invoice else (at_doc.invoice_no if at_doc and not receipt else "")
     name_no = invoice_no or (at_doc.invoice_no if at_doc else "")    # no invoice of your own: the AT number
     names = {}
     if invoice_date and invoice and invoice.file:
         names["invoice"] = cfg.income_name("invoice", invoice_date, name_no, os.path.splitext(invoice.file)[1] or ".pdf")
     if invoice_date and at_doc and at_doc.file:
-        names["recibo"] = cfg.income_name("recibo", invoice_date, name_no, os.path.splitext(at_doc.file)[1] or ".pdf")
+        ext = os.path.splitext(at_doc.file)[1] or ".pdf"
+        if receipt:
+            names["recibo"] = cfg.income_name("recibo", invoice_date, name_no, ext)
+        else:
+            if at_doc.doc_type in ("invoice", "simplified_invoice"):
+                at_name = cfg.income_name("invoice", at_doc.date or invoice_date, at_doc.invoice_no, ext)
+            else:
+                at_name = os.path.basename(at_doc.file)
+            if "invoice" in names:
+                names["at_document"] = "AT_" + at_name if at_name == names["invoice"] else at_name
+            else:
+                names["invoice"] = at_name
+    if at_doc and at_doc.doc_type in ("invoice", "simplified_invoice"):
+        checks.append("this AT invoice has no receipt; enter the payment on this row when the receipt is issued")
+    if receipt and receipt.doc_type == "receipt" and not invoice:
+        checks.append("match this receipt to its invoice before booking; if the sale is already in the books, "
+                      "update its receipt details on the existing row")
     case = vat_case(vat_eur, _f(extra.get("not_subject")), country, extra=extra, net_eur=net_eur)
     client_case = rule.get("vat_case")
     if vat_eur > 0:
@@ -116,8 +133,8 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "country": country,
         "client_tax_id": rule.get("tax_id") or (at_doc.buyer_nif if at_doc else "") or invoice_tax_id,
         "invoice_no": invoice_no,
-        "recibo_no": at_doc.invoice_no if at_doc else "",
-        "recibo_date": at_doc.date.isoformat() if at_doc and at_doc.date else "",
+        "recibo_no": receipt.invoice_no if receipt else "",
+        "recibo_date": receipt.date.isoformat() if receipt and receipt.date else "",
         "currency": currency,
         "amount": amount if amount is not None else "",
         "fx": fx,
@@ -127,7 +144,8 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "withheld": withheld,
         "vat_case": case,
         "invoice_file": names.get("invoice", ""),
-        "recibo_file": names.get("recibo", ""),
+        # The second attachment column also holds the Portal invoice when both files exist.
+        "recibo_file": names.get("recibo") or names.get("at_document", ""),
         "account": rule.get("account", ""),
     }
     if credit_checks := vat.credit_note_checks(at_doc):

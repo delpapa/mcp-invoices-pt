@@ -107,6 +107,7 @@ def test_formulas_agree_with_python(books, tmp_path):
     assert abs(ws.cell(layout.SUMS_ROW + 5, irs_col).value - mine_irs["2099"]) < 0.005
     totals = wb["Income"]
     assert abs(totals.cell(3, 3).value - 1500.0) < 0.005 and abs(totals.cell(4, 4).value - 1000.0) < 0.005
+    assert totals.cell(4, 3).value == 500.0  # exclude the December invoice paid next January
 
 def test_old_income_layout_refuses_unsupported_sales_before_writing(tmp_path):
     cfg = Config({"paths": {"year_root": str(tmp_path / "{year}")}})

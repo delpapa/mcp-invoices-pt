@@ -35,6 +35,8 @@ SALES = [
          vat_case="PT / C1"),
     dict(invoice_date="2099-07-02", client="PT intermediate", invoice_no="S4", net_eur=200, vat_rate=13, vat_eur=26,
          vat_case="PT / C5"),
+    dict(invoice_date="2099-12-31", client="US Client", invoice_no="S5", recibo_no="RG 5",
+         recibo_date="2100-01-01", net_eur=7, vat_case="NON-EU / C8"),
 ]
 EXPECTED = {  # hand-computed: opening credit 100; USD 20 at 1.25 = 16.00 self-charged at 23% = 3.68
     "Q1": {3: 516.0, 4: 118.68, 8: 1000.0, 16: 30.0, 17: 6.9, 24: 22.08, 61: 100.0, 98: 16.0, 90: 1546.0,

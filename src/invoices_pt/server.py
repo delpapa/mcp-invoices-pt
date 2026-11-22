@@ -17,7 +17,7 @@ from .filing import file_document as file_document_
 from .filing import index_folder
 from .income import propose as propose_income_
 from .ledger import Ledger, sha256
-from .books import create_year, open_books, where
+from .books import annual_income_totals, create_year, open_books, where
 from .books import opening_credit as opening_credit_
 
 INSTRUCTIONS = """\
@@ -169,10 +169,10 @@ def add_income(row: dict, dry_run: bool = True) -> dict:
 
 @mcp.tool()
 def income_totals(year: int) -> list[dict]:
-    """The IRS and Segurança Social totals at the top of the income tab, per quarter and for the year:
+    """IRS and Segurança Social totals per quarter and for the year, including receipts from older invoice books:
     gross income by invoice date (IRS), income by recibo date (Segurança Social quarterly declaration), and
     business expenses."""
-    return open_books(_cfg(), year)[1].summary()
+    return annual_income_totals(_cfg(), year)
 
 
 @mcp.tool()

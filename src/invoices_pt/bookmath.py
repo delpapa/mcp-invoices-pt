@@ -168,23 +168,33 @@ def declaration(expenses: list[dict], income: list[dict], opening_credit: float,
     return out
 
 
+RECEIPT_TOTAL = "Income € by recibo date (Segurança Social quarterly declaration)"
+
+
+def _year_totals(rows, key, value, year: int) -> dict:
+    amounts = {q: 0.0 for q in QUARTERS}
+    for row in rows:
+        date = day(row.get(key))
+        if date and date.year == year:
+            amounts[quarter(date)] += value(row) or 0.0
+    amounts = {q: r2(v) for q, v in amounts.items()}
+    amounts[str(year)] = r2(sum(amounts.values()))
+    return amounts
+
+
+def receipt_totals(income, year: int) -> dict:
+    return {"item": RECEIPT_TOTAL,
+            **_year_totals(income, "recibo_date", lambda r: num(r.get("net_eur")), year)}
+
+
 def income_totals(expenses: list[dict], income: list[dict], year: int) -> list[dict]:
-    """IRS / Segurança Social totals per quarter, as the income tab's top block computes them."""
-    def by(rows, key, value):
-        out = {q: 0.0 for q in QUARTERS}
-        for rec in rows:
-            q = quarter(rec.get(key))
-            if q:
-                out[q] += value(rec) or 0.0
-        out = {q: r2(v) for q, v in out.items()}
-        out[str(year)] = r2(sum(out.values()))
-        return out
+    """IRS / Segurança Social totals for rows in this book."""
     return [
-        {"item": "Gross income € (IRS Anexo B, by invoice date)", **by(income, "invoice_date", lambda r: num(r.get("net_eur")))},
-        {"item": "Income € by recibo date (Segurança Social quarterly declaration)",
-         **by(income, "recibo_date", lambda r: num(r.get("net_eur")))},
+        {"item": "Gross income € (IRS Anexo B, by invoice date)",
+         **_year_totals(income, "invoice_date", lambda r: num(r.get("net_eur")), year)},
+        receipt_totals(income, year),
         {"item": "Business expenses € (IRS deductible, Anexo B quadro 17 if used)",
-         **by(expenses, "date", lambda r: expense_row(r)["irs"])},
+         **_year_totals(expenses, "date", lambda r: expense_row(r)["irs"], year)},
     ]
 
 
