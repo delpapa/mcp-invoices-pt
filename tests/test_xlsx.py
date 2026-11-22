@@ -325,3 +325,15 @@ def test_manual_quarter_amounts_survive_declaration_and_filing(cfg):
     assert boxes(exp, "Q2")[61] == 80
     assert exp.freeze("Q1", dry_run=False)["frozen"]
     assert boxes(exp, "Q1") == q1 and boxes(exp, "Q2")[61] == 80
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file mode")
+def test_saving_a_shared_workbook_preserves_its_access_mode(cfg):
+    import stat
+
+    create_year(cfg, 2026, 0)
+    expenses, _ = open_books(cfg, 2026)
+    path = Path(expenses.book.path)
+    path.chmod(0o640)
+    assert expenses.add({"date": "2026-01-10", "invoice_no": "P1"}, dry_run=False)["written"]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640

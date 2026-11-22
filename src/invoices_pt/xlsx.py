@@ -12,6 +12,7 @@ import datetime as dt
 import errno
 import os
 import re
+import stat
 import tempfile
 from copy import copy
 
@@ -110,10 +111,12 @@ class XlsxBook:
             # Serialize the version check and replacement across processes. A stale
             # snapshot must never erase a sale, expense or filing another writer saved.
             folder, name = os.path.split(self.path)
-            with FileLock(os.path.join(folder, f".{name}.lock"), timeout=10):
+            mode = stat.S_IMODE(os.stat(self.path).st_mode)
+            with FileLock(os.path.join(folder, f".{name}.lock"), timeout=10, mode=mode):
                 self.check_closed()
                 if not os.path.exists(self.path) or _version(os.stat(self.path)) != wb._invoices_version:
                     raise WorkbookOpen(f"{name} changed during this operation; retry with the latest workbook")
+                os.chmod(tmp, mode)
                 os.replace(tmp, self.path)
                 wb._invoices_version = _version(os.stat(self.path))
         finally:
