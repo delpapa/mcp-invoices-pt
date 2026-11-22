@@ -73,6 +73,8 @@ class XlsxBook:
     def _extend_summary_ranges(self, wb: openpyxl.Workbook) -> None:
         """Upgrade only recognized 5,000-row summary formulas in previously generated books."""
         for table in (self.expenses, self.income):
+            if self.names[table.KIND] not in wb.sheetnames:
+                continue
             ws = table._sheet(wb)
             old = []
             for cells in ws.iter_rows(max_row=min(ws.max_row, 200)):
@@ -102,6 +104,8 @@ class XlsxBook:
 
     def save(self, wb: openpyxl.Workbook) -> None:
         self.check_closed()
+        original = os.stat(self.path)
+        expected = getattr(wb, "_invoices_version", _version(original))
         self._extend_summary_ranges(wb)
         wb.calculation.fullCalcOnLoad = True           # Excel / LibreOffice recalculate on open
         fd, tmp = tempfile.mkstemp(suffix=".xlsx", dir=os.path.dirname(self.path) or ".")
@@ -111,10 +115,10 @@ class XlsxBook:
             # Serialize the version check and replacement across processes. A stale
             # snapshot must never erase a sale, expense or filing another writer saved.
             folder, name = os.path.split(self.path)
-            mode = stat.S_IMODE(os.stat(self.path).st_mode)
+            mode = stat.S_IMODE(original.st_mode)
             with FileLock(os.path.join(folder, f".{name}.lock"), timeout=10, mode=mode):
                 self.check_closed()
-                if not os.path.exists(self.path) or _version(os.stat(self.path)) != wb._invoices_version:
+                if not os.path.exists(self.path) or _version(os.stat(self.path)) != expected:
                     raise WorkbookOpen(f"{name} changed during this operation; retry with the latest workbook")
                 os.chmod(tmp, mode)
                 os.replace(tmp, self.path)

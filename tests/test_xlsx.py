@@ -337,3 +337,12 @@ def test_saving_a_shared_workbook_preserves_its_access_mode(cfg):
     path.chmod(0o640)
     assert expenses.add({"date": "2026-01-10", "invoice_no": "P1"}, dry_run=False)["written"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_existing_caller_can_save_a_workbook_loaded_with_openpyxl(cfg):
+    create_year(cfg, 2026, 0)
+    exp, _ = open_books(cfg, 2026)
+    wb = openpyxl.load_workbook(exp.book.path)
+    wb["Expenses"]["D1"] = "Reviewed"
+    exp.book.save(wb)
+    assert exp.book.load()["Expenses"]["D1"].value == "Reviewed"
