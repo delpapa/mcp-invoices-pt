@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from . import vat
 from .config import Config
@@ -14,6 +15,26 @@ def _f(x) -> float:
         return float(x or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _tax_id(value) -> str:
+    identifier = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return identifier[2:] if re.fullmatch(r"PT\d{9}", identifier) else identifier
+
+
+def client_conflict(cfg: Config | None, invoice: Document, at_doc: Document) -> str:
+    """Describe contradictory client evidence before combining two sales documents."""
+    own_rule = cfg.client_rule(invoice.extra.get("client", ""), invoice.buyer_nif) if cfg else {}
+    at_id = _tax_id(at_doc.buyer_nif)
+    if at_id in ("", "000000000", "999999990"):
+        return ""
+    at_rule = cfg.client_rule(at_doc.buyer_nif) if cfg else {}
+    expected = invoice.buyer_nif or own_rule.get("tax_id")
+    if _tax_id(expected) not in ("", "000000000", "999999990", at_id):
+        return f"the invoice client tax ID is {expected} and the AT document gives {at_doc.buyer_nif}"
+    if own_rule and at_rule and own_rule != at_rule:
+        return "the invoice and AT document match different client rules"
+    return ""
 
 
 def vat_case(vat_eur: float, not_subject: float, country: str, *,
@@ -45,31 +66,40 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
 
     extra = at_doc.extra if at_doc else {}
     client_text = (invoice.extra.get("client", "") if invoice else "")
-    rule = cfg.client_rule(client_text, at_doc.buyer_nif if at_doc else "")
-    total = _f(at_doc.amount) if at_doc else 0.0
+    invoice_tax_id = invoice.buyer_nif if invoice else ""
+    rule = cfg.client_rule(client_text, invoice_tax_id, at_doc.buyer_nif if at_doc else "")
+    total = at_doc.amount if at_doc else None
     vat_eur = _f(at_doc.vat_included) if at_doc else 0.0
-    net_eur = round(total - vat_eur, 2) if at_doc else None
+    net_eur = round(total - vat_eur, 2) if total is not None and at_doc.vat_included is not None else None
     withheld = signed_amount(_f(extra.get("withholding")), at_doc.doc_type) if at_doc else 0.0
     country = rule.get("country") or extra.get("buyer_country", "")
-    amount = invoice.amount if invoice and invoice.amount is not None else total
-    currency = (invoice.currency if invoice else "") or "EUR"
-    fx = 1.0
-    if currency != "EUR" and net_eur:
-        fx = round(amount / net_eur, 4)
+    amount = invoice.amount if invoice else total
+    currency = invoice.currency if invoice else "EUR"
+    fx = 1.0 if currency == "EUR" else ""
+    if amount is None:
+        checks.append("no amount read from the document; check the total before booking")
+    if not currency:
+        checks.append("no invoice currency read; check the currency before booking")
+    elif currency != "EUR" and total and amount is not None:
+        fx = round(amount / total, 4)
         if not 0.5 < fx < 2:
             checks.append(f"implied rate {fx} {currency}/EUR looks wrong; are these the same sale?")
-    elif currency == "EUR" and net_eur is not None and invoice and abs(amount - total) > 0.005:
+    elif currency == "EUR" and total is not None and invoice and amount is not None and abs(amount - total) > 0.005:
         checks.append(f"invoice total {amount} differs from the AT document total {total}")
     if invoice and at_doc and at_doc.date and invoice.date and at_doc.date < invoice.date:
         checks.append("the AT document is dated before the invoice")
 
-    invoice_date = (invoice.date if invoice else None) or (at_doc.date if at_doc else None)
+    invoice_date = invoice.date if invoice else at_doc.date
+    if not invoice_date:
+        checks.append("no invoice date read; give the issue date before booking")
+    if at_doc and not at_doc.date and invoice:
+        checks.append("no date read from the AT document; check its issue date")
     invoice_no = invoice.invoice_no if invoice else ""
     name_no = invoice_no or (at_doc.invoice_no if at_doc else "")    # no invoice of your own: the AT number
     names = {}
-    if invoice and invoice.file:
+    if invoice_date and invoice and invoice.file:
         names["invoice"] = cfg.income_name("invoice", invoice_date, name_no, os.path.splitext(invoice.file)[1] or ".pdf")
-    if at_doc and at_doc.file:
+    if invoice_date and at_doc and at_doc.file:
         names["recibo"] = cfg.income_name("recibo", invoice_date, name_no, os.path.splitext(at_doc.file)[1] or ".pdf")
     case = vat_case(vat_eur, _f(extra.get("not_subject")), country, extra=extra, net_eur=net_eur)
     client_case = rule.get("vat_case")
@@ -84,12 +114,12 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         "invoice_date": invoice_date.isoformat() if invoice_date else "",
         "client": rule.get("name") or client_text,
         "country": country,
-        "client_tax_id": rule.get("tax_id") or (at_doc.buyer_nif if at_doc else ""),
+        "client_tax_id": rule.get("tax_id") or (at_doc.buyer_nif if at_doc else "") or invoice_tax_id,
         "invoice_no": invoice_no,
         "recibo_no": at_doc.invoice_no if at_doc else "",
         "recibo_date": at_doc.date.isoformat() if at_doc and at_doc.date else "",
         "currency": currency,
-        "amount": amount,
+        "amount": amount if amount is not None else "",
         "fx": fx,
         "net_eur": net_eur if net_eur is not None else "",
         "vat_rate": round(vat_eur / net_eur * 100) if net_eur else 0,
@@ -105,6 +135,9 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         checks.extend(credit_checks)
     if not row["client"]:
         checks.append("no client name: add a client rule in the config, or give the name")
-    if at_doc and at_doc.buyer_nif and rule.get("tax_id") and rule["tax_id"] != at_doc.buyer_nif:
+    conflict = client_conflict(cfg, invoice, at_doc) if invoice and at_doc else ""
+    if conflict:
+        checks.append(conflict)
+    elif at_doc and at_doc.buyer_nif and rule.get("tax_id") and _tax_id(rule["tax_id"]) != _tax_id(at_doc.buyer_nif):
         checks.append(f"the AT document gives the client tax ID as {at_doc.buyer_nif}; the config says {rule['tax_id']}")
     return {"row": row, "file_names": names, "checks": checks, "client_rule": rule.get("match", "")}

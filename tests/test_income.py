@@ -67,6 +67,31 @@ def test_issued_credit_note_reverses_income_and_withholding(qr_png, cfg):
     assert any("credit note" in check for check in result["checks"])
 
 
+def test_exchange_rate_compares_both_gross_totals(qr_png, cfg):
+    result = propose(cfg, invoice(amount=738.0), at_doc(qr_png, PT_SALE))
+    assert (result["row"]["amount"], result["row"]["net_eur"], result["row"]["fx"]) == (738, 500, 1.2)
+
+
+def test_missing_invoice_fields_remain_unknown(qr_png, cfg):
+    partial = invoice(day=None, amount=None)
+    for receipt in (None, at_doc(qr_png)):
+        result = propose(cfg, partial, receipt)
+        row = result["row"]
+        assert (row["invoice_date"], row["amount"], row["fx"]) == ("", "", "")
+        assert result["file_names"] == {}
+        assert any("date" in c for c in result["checks"])
+        assert any("amount" in c for c in result["checks"])
+
+
+def test_mismatched_printed_client_id_warns_on_explicit_pair(qr_png, cfg):
+    own = invoice()
+    own.buyer_nif = "PT500000001"
+    receipt = at_doc(qr_png, PT_SALE)
+    assert any("client tax ID" in c for c in propose(cfg, own, receipt)["checks"])
+    own.buyer_nif = "PT500000000"
+    assert not any("tax ID" in c for c in propose(cfg, own, receipt)["checks"])
+
+
 def test_missing_income(tmp_path):
     (tmp_path / "inv1.pdf").write_bytes(b"x")
     (tmp_path / "stray.pdf").write_bytes(b"x")

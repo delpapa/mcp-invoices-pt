@@ -383,8 +383,9 @@ copy.
   nothing else, that document is the sale. Its QR code gives the date, amount, IVA, withholding and client tax id.
   Add a `clients` rule so it books with the client's name.
 - **With an invoice of your own:** if you also send your own invoice (e.g. in dollars to a foreign client), the
-  plan pairs it with its Portal document by date and amount. The row keeps both, and the exchange rate implied by
-  the two.
+  plan checks the dates, amounts and available client tax IDs. If several documents fit, the plan lists them
+  under `needs_reading` with their possible matches. Once you identify a pair, pass both files to
+  `propose_income`. The row keeps both documents and the exchange rate implied by their gross totals.
 
 ### Type the return
 

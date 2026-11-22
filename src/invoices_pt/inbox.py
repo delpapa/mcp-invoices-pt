@@ -8,7 +8,7 @@ import os
 from .config import Config
 from .documents import efatura, text
 from .extract import expense_row, proposal, read_document
-from .income import propose as propose_income
+from .income import client_conflict, propose as propose_income
 from .ledger import Ledger, sha256
 from .model import Document
 
@@ -55,22 +55,42 @@ def _same_sale(invoice: Document, at_doc: Document) -> bool:
     """Your invoice and an AT document plausibly belong to the same sale."""
     if not (invoice.date and at_doc.date) or not 0 <= (at_doc.date - invoice.date).days <= 92:
         return False
-    total, vat = at_doc.amount or 0.0, at_doc.vat_included or 0.0
-    if invoice.currency in ("EUR", ""):
-        return abs((invoice.amount or 0) - total) < 0.01
-    return total - vat > 0 and 0.5 < (invoice.amount or 0) / (total - vat) < 2
+    if invoice.amount is None or at_doc.amount is None or not invoice.currency:
+        return False
+    if invoice.currency == "EUR":
+        return abs(invoice.amount - at_doc.amount) < 0.01
+    return at_doc.amount != 0 and 0.5 < invoice.amount / at_doc.amount < 2
 
 
-def pair_sales(invoices: list[Document], at_docs: list[Document]) -> list[tuple[Document | None, Document | None]]:
-    """Match each AT document with the latest earlier invoice of yours that fits it; leftovers stay alone."""
+def pair_sales(invoices: list[Document], at_docs: list[Document], cfg: Config | None = None,
+               needs_reading: list[dict] | None = None) -> list[tuple[Document | None, Document | None]]:
+    """Pair only mutual, unique matches. Send ambiguous documents for review when building a booking plan."""
+    at_docs = sorted(at_docs, key=lambda d: d.date or dt.date.min)
+    by_invoice = [[] for _ in invoices]
+    by_at = [[] for _ in at_docs]
+    for j, at in enumerate(at_docs):
+        for i, invoice in enumerate(invoices):
+            if _same_sale(invoice, at) and not client_conflict(cfg, invoice, at):
+                by_at[j].append(i)
+                by_invoice[i].append(j)
+
     pairs, used = [], set()
-    for at in sorted(at_docs, key=lambda d: d.date or dt.date.min):
-        fits = [i for i in invoices if id(i) not in used and _same_sale(i, at)]
-        best = max(fits, key=lambda i: i.date) if fits else None
-        if best:
-            used.add(id(best))
-        pairs.append((best, at))
-    pairs += [(i, None) for i in invoices if id(i) not in used]
+    for at, candidates in zip(at_docs, by_at):
+        if len(candidates) == 1 and len(by_invoice[candidates[0]]) == 1:
+            i = candidates[0]
+            pairs.append((invoices[i], at))
+            used.add(i)
+        elif candidates and needs_reading is not None:
+            needs_reading.append({"path": at.file, "possible_matches": [invoices[i].file for i in candidates]})
+        else:
+            pairs.append((None, at))
+    for i, invoice in enumerate(invoices):
+        if i in used:
+            continue
+        if by_invoice[i] and needs_reading is not None:
+            needs_reading.append({"path": invoice.file, "possible_matches": [at_docs[j].file for j in by_invoice[i]]})
+        else:
+            pairs.append((invoice, None))
     return pairs
 
 
@@ -128,7 +148,7 @@ def plan(cfg: Config, ledger: Ledger) -> dict:
         row = expense_row(doc, prop)
         out["expenses"].append({"path": path, "layer": doc.layer, "file_name": prop["file_name"], "row": row,
                                 "checks": _checks(doc, prop, row)})
-    for invoice, at in pair_sales(invoices, at_docs):
+    for invoice, at in pair_sales(invoices, at_docs, cfg, out["needs_reading"]):
         sale = propose_income(cfg, invoice, at)
         out["sales"].append({"invoice": invoice.file if invoice else "", "at_document": at.file if at else "", **sale})
     return out
