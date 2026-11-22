@@ -6,14 +6,12 @@ import datetime as dt
 import os
 
 from .config import Config
-from .documents import efatura, text
+from .documents import DOC_EXT, efatura, text
 from .extract import expense_row, proposal, read_document
 from .income import propose as propose_income
 from .ledger import Ledger, sha256
 from .model import Document
 from .income import client_conflict
-
-DOC_EXT = (".pdf", ".png", ".jpg", ".jpeg", ".webp")
 
 
 def scan(cfg: Config, ledger: Ledger) -> list[dict]:

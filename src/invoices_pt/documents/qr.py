@@ -9,8 +9,9 @@ import tempfile
 from collections.abc import Iterator
 
 import zxingcpp
-from PIL import Image
+from PIL import Image, ImageSequence
 
+from . import IMAGE_EXT
 from ..model import Document, signed_amount
 
 # Field codes from the AT technical specification
@@ -23,7 +24,6 @@ FIELDS = {
 }
 DOC_TYPES = {"FT": "invoice", "FS": "simplified_invoice", "FR": "invoice_receipt", "NC": "credit_note",
              "ND": "debit_note", "RG": "receipt", "RC": "receipt"}
-IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
 KEEP = ("status", "fiscal_space", "buyer_country", "not_subject", "withholding", "base_exempt", "base_reduced", "vat_reduced",
         "base_intermediate", "vat_intermediate", "base_normal", "vat_normal")
 
@@ -39,7 +39,7 @@ def parse_payload(text: str) -> dict | None:
 def _pages(path: str, dpi: int) -> Iterator[Image.Image]:
     if path.lower().endswith(IMAGE_EXT):
         with Image.open(path) as img:
-            yield img
+            yield from ImageSequence.Iterator(img)
         return
     with tempfile.TemporaryDirectory() as d:
         subprocess.run(["pdftoppm", "-r", str(dpi), "-png", path, f"{d}/p"], check=True, capture_output=True)
