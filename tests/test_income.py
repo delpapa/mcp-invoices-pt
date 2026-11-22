@@ -155,3 +155,14 @@ def test_paired_unpaid_invoices_preserve_both_attachments(qr_png, cfg):
     assert row["invoice_file"] == result["file_names"]["invoice"]
     assert row["recibo_file"] == result["file_names"]["at_document"]
     assert row["invoice_file"] != row["recibo_file"]
+
+
+def test_one_cent_difference_does_not_pair_two_euro_sales(cfg):
+    from invoices_pt.inbox import pair_sales
+
+    own = invoice(amount=11, currency="EUR")
+    portal = Document("qr", date=own.date, amount=10.99, doc_type="invoice_receipt", vat_included=0)
+    assert any("differs" in note for note in propose(cfg, own, portal)["checks"])
+    assert (own, portal) not in pair_sales([own], [portal], cfg)
+    portal.amount = 11
+    assert pair_sales([own], [portal], cfg) == [(own, portal)]

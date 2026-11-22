@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 
+from . import bookmath
 from .config import Config
 from .documents import DOC_EXT, efatura, text
 from .extract import expense_row, proposal, read_document
@@ -57,7 +58,7 @@ def _same_sale(invoice: Document, at_doc: Document) -> bool:
     if invoice.amount is None or at_doc.amount is None or not invoice.currency:
         return False
     if invoice.currency == "EUR":
-        return abs(invoice.amount - at_doc.amount) < 0.01
+        return bookmath.r2(invoice.amount) == bookmath.r2(at_doc.amount)
     return at_doc.amount != 0 and 0.5 < invoice.amount / at_doc.amount < 2
 
 

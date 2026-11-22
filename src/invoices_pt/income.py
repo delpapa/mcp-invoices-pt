@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import vat
+from . import bookmath, vat
 from .config import Config
 from .model import Document, signed_amount
 
@@ -86,7 +86,7 @@ def propose(cfg: Config, invoice: Document | None, at_doc: Document | None) -> d
         fx = round(amount / total, 4)
         if not 0.5 < fx < 2:
             checks.append(f"implied rate {fx} {currency}/EUR looks wrong; are these the same sale?")
-    elif currency == "EUR" and total is not None and invoice and amount is not None and abs(amount - total) > 0.005:
+    elif currency == "EUR" and total is not None and invoice and amount is not None and bookmath.r2(amount) != bookmath.r2(total):
         checks.append(f"invoice total {amount} differs from the AT document total {total}")
     if invoice and at_doc and at_doc.date and invoice.date and at_doc.date < invoice.date:
         checks.append("the AT document is dated before the invoice")
