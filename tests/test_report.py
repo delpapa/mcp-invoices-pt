@@ -102,3 +102,14 @@ def test_reconcile_treats_xlsx_numeric_zero_as_recorded_vat():
     assert reconcile_efatura([doc], [row])["differences"] == []
     doc.vat_included = 1.0
     assert reconcile_efatura([doc], [row])["differences"][0]["issues"] == ["VAT 0 vs 1.0"]
+
+
+def test_reconcile_different_document_types_are_distinct():
+    day = dt.date(2026, 1, 1)
+    docs = [Document(layer="efatura", date=day, invoice_no="1", supplier_vat="PT1",
+                     amount=0, vat_included=0, doc_type=kind) for kind in ("invoice", "credit_note")]
+    row = dict(rec(31, day.isoformat(), "Shop", 0, "1", vat=0, supplier_vat="PT1"), doc_type="credit_note")
+    report = reconcile_efatura(docs, [row])
+    assert len(report["not_in_sheet"]) == 1
+    assert report["pt_rows_not_in_efatura"] == []
+    assert len(reconcile_efatura(docs[:1], [row])["not_in_sheet"]) == 1

@@ -97,10 +97,12 @@ def missing_income(records: list[dict], folder: str) -> dict:
     return out
 
 
-def _reconciliation_keys(supplier_vat, invoice_no, day, amount):
+def _reconciliation_keys(supplier_vat, invoice_no, doc_type, day, amount):
     supplier, number = _n(supplier_vat), _n(invoice_no)
     payment = (day, amount) if day and amount is not None else None
-    return {"supplier_number": (supplier, number) if supplier and number else None, "number": number,
+    identity = (supplier, number) if supplier and number else None
+    return {"document": (identity, _n(doc_type)) if identity and doc_type else None,
+            "supplier_number": identity, "number": number,
             "supplier_payment": (supplier, payment) if supplier and payment else None, "payment": payment}
 
 
@@ -115,11 +117,12 @@ def _unique_positions(keys, field, used):
 
 def _efatura_pairs(docs, records):
     """Reserve unambiguous number matches before matching the remaining payments."""
-    doc_keys = [_reconciliation_keys(d.supplier_vat, d.invoice_no, d.date, _amount(d.amount)) for d in docs]
-    row_keys = [_reconciliation_keys(r["supplier_vat"], r["invoice_no"], _date(r["date"]), _amount(r["amount"]))
+    doc_keys = [_reconciliation_keys(d.supplier_vat, d.invoice_no, d.doc_type, d.date, _amount(d.amount)) for d in docs]
+    row_keys = [_reconciliation_keys(r["supplier_vat"], r["invoice_no"], r.get("doc_type"),
+                                     _date(r["date"]), _amount(r["amount"]))
                 for r in records]
     pairs, used_rows = {}, set()
-    for field in ("supplier_number", "number", "supplier_payment", "payment"):
+    for field in ("document", "supplier_number", "number", "supplier_payment", "payment"):
         invoices = _unique_positions(doc_keys, field, pairs)
         rows = _unique_positions(row_keys, field, used_rows)
         for key, i in invoices.items():
@@ -128,6 +131,9 @@ def _efatura_pairs(docs, records):
                 continue
             doc_vat, row_vat = _n(docs[i].supplier_vat), _n(records[j]["supplier_vat"])
             if doc_vat and row_vat and doc_vat != row_vat:
+                continue
+            kind = _n(records[j].get("doc_type"))
+            if kind and docs[i].doc_type and kind != _n(docs[i].doc_type):
                 continue
             pairs[i] = records[j]
             used_rows.add(j)
