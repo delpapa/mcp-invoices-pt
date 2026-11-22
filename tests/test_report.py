@@ -162,3 +162,22 @@ def test_cancelled_exports_do_not_create_missing_invoices_or_hide_active_ones():
     assert reconcile_efatura([cancelled, active], [row])["differences"] == []
     diff = reconcile_efatura([cancelled], [row])["differences"]
     assert [item["row"] for item in diff] == [31] and "cancelled" in diff[0]["issues"][0].lower()
+
+
+def test_reconciliation_flags_an_expense_booked_in_a_different_quarter():
+    doc = Document("efatura", date=dt.date(2026, 3, 31), supplier_vat="PT1", invoice_no="FT1",
+                   amount=10, vat_included=1)
+    row = rec(31, "01.04.2026", "Shop", 10, invoice_no="FT1", supplier_vat="PT1", vat=1)
+    result = reconcile_efatura([doc], [row])
+    assert not result["not_in_sheet"]
+    assert result["differences"][0]["issues"] == ["date 01.04.2026 vs 2026-03-31"]
+
+
+def test_cancelled_copy_stays_visible_in_missing_report(tmp_path):
+    day = dt.date(2026, 3, 31)
+    doc = Document("qr", date=day, supplier_vat="PT1", invoice_no="FT1", doc_type="invoice",
+                   amount=10, extra={"status": "A"})
+    row = rec(31, day.isoformat(), "Shop", 10, invoice_no="FT1", supplier_vat="PT1")
+    (tmp_path / "annulment.pdf").touch()
+    result = missing([row], str(tmp_path), read=lambda path: doc)
+    assert result["unbooked_files"] == ["annulment.pdf"] and not result["companion_files"]

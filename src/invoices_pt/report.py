@@ -59,6 +59,8 @@ def _compatible_payment(doc: Document, row: dict) -> bool:
     def conflict(a, b):
         return bool(_n(a) and _n(b) and _n(a) != _n(b))
 
+    if doc.cancelled:
+        return False
     if conflict(doc.currency, row.get("currency")) or conflict(doc.supplier_vat, row.get("supplier_vat")):
         return False
     if not (doc.supplier_vat and row.get("supplier_vat")) and conflict(doc.supplier, row.get("supplier")):
@@ -184,6 +186,8 @@ def reconcile_efatura(docs: list[Document], records: list[dict]) -> dict:
             continue
         matched.add(r["row"])
         diffs = []
+        if d.date and _date(r["date"]) != d.date:
+            diffs.append(f"date {r['date']} vs {d.date.isoformat()}")
         if _amount(r["amount"]) != round(d.amount or 0, 2):
             diffs.append(f"amount {r['amount']} vs {d.amount}")
         has_vat = r["vat_included"] not in (None, "")
