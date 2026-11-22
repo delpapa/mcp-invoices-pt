@@ -105,3 +105,82 @@ def test_replaced_archive_file_does_not_make_inbox_download_a_duplicate(qr_png, 
     assert not inbox.plan(cfg, ledger)["copies"]
     result = file_document(cfg, ledger, download, dry_run=False)
     assert os.path.isfile(download) and "already exists" in result["error"]
+
+
+def test_racing_file_publication_keeps_both_documents(qr_png, cfg, tmp_path, monkeypatch):
+    from pathlib import Path
+    from invoices_pt import filing
+
+    paths, ledger = _setup(cfg)
+    src = qr_png(folder=tmp_path / "inbox")
+    dest = Path(paths["expenses_dir"]) / "same-name.png"
+    mkdir = os.makedirs
+
+    def competitor_finishes_first(folder, **kwargs):
+        mkdir(folder, **kwargs)
+        if os.fspath(folder) == str(dest.parent):
+            dest.write_bytes(b"independently filed document")
+
+    monkeypatch.setattr(filing.os, "makedirs", competitor_finishes_first)
+    result = file_document(cfg, ledger, src, dest.name, dry_run=False)
+    assert "already exists" in result["error"]
+    assert os.path.isfile(src)
+    assert dest.read_bytes() == b"independently filed document"
+
+
+def test_filing_can_retry_after_a_ledger_failure(qr_png, cfg, tmp_path, monkeypatch):
+    _, ledger = _setup(cfg)
+    src = qr_png(folder=tmp_path / "inbox")
+    planned = file_document(cfg, ledger, src)["to"]
+    digest = sha256(src)
+
+    def full(*args):
+        raise OSError("ledger disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger, "record", full)
+        with pytest.raises(OSError, match="ledger disk full"):
+            file_document(cfg, ledger, src, dry_run=False)
+    assert os.path.isfile(src)
+    file_document(cfg, ledger, src, dry_run=False)
+    assert ledger.get(digest)["path"] == planned
+    assert sha256(planned) == digest and not os.path.exists(src)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses exclusive rename")
+def test_archive_on_a_drive_without_hard_links(qr_png, cfg, tmp_path, monkeypatch):
+    import errno
+    from invoices_pt import filing
+
+    _, ledger = _setup(cfg)
+    src = qr_png(folder=tmp_path / "inbox")
+    dest = file_document(cfg, ledger, src)["to"]
+
+    def unsupported(*args):
+        raise OSError(errno.ENOTSUP, "links unsupported")
+
+    monkeypatch.setattr(filing.os, "link", unsupported)
+    with monkeypatch.context() as fail:
+        def full(*args):
+            raise OSError("drive full")
+        fail.setattr(filing.os, "replace", full)
+        with pytest.raises(OSError, match="drive full"):
+            file_document(cfg, ledger, src, dry_run=False)
+    assert os.path.isfile(src) and not os.path.exists(dest)
+    assert file_document(cfg, ledger, src, dry_run=False) == {"status": "moved", "to": dest}
+
+
+def test_identical_unindexed_archive_is_recorded_only_on_commit(qr_png, cfg, tmp_path):
+    import shutil
+
+    _, ledger = _setup(cfg)
+    src = qr_png(folder=tmp_path / "inbox")
+    dest = file_document(cfg, ledger, src)["to"]
+    shutil.copyfile(src, dest)
+    digest = sha256(src)
+    preview = file_document(cfg, ledger, src)
+    assert preview["existing"] == dest and not preview["deleted"]
+    assert os.path.isfile(src) and ledger.get(digest) is None
+    result = file_document(cfg, ledger, src, dry_run=False)
+    assert result["existing"] == dest and result["deleted"]
+    assert ledger.get(digest)["path"] == dest and sha256(dest) == digest

@@ -6,8 +6,10 @@ Safety rules: never overwrite, and only ever delete files that sit in the inbox.
 from __future__ import annotations
 
 import datetime as dt
+import errno
 import os
 import shutil
+import tempfile
 
 from .config import Config
 from .documents import efatura
@@ -59,6 +61,31 @@ def _filed_copy(ledger: Ledger, digest: str, doc: Document | None) -> str | None
     return None
 
 
+def _publish_copy(source: str, dest: str, digest: str) -> None:
+    """Stage complete bytes on the archive filesystem and claim the destination exclusively."""
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(dest)) as staging:
+        staged = os.path.join(staging, "document")
+        shutil.copy2(source, staged)
+        if sha256(staged) != digest:
+            raise OSError("the source document changed while filing; retry with the current file")
+        if os.name == "nt":
+            os.rename(staged, dest)  # Windows rename refuses existing files
+            return
+        try:
+            os.link(staged, dest)
+        except OSError as exc:
+            if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.ENOSYS):
+                raise
+            # Some mounted drives do not support links. Reserve the final name first.
+            with open(dest, "xb"):
+                pass
+            try:
+                os.replace(staged, dest)
+            except BaseException:
+                os.unlink(dest)
+                raise
+
+
 def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_run: bool = True,
                   delete_duplicate: bool = True) -> dict:
     inbox = os.path.realpath(cfg.paths(dt.date.today().year)["inbox"])
@@ -77,21 +104,35 @@ def file_document(cfg: Config, ledger: Ledger, path: str, name: str = "", dry_ru
         year = doc.date.year
         dest = os.path.join(target_dir(cfg, doc, year), name or proposal(doc, cfg)["file_name"])
 
+    key, layer = (doc.key, "document") if doc else ("", "csv")
     copy = _filed_copy(ledger, digest, doc)
+    if not copy and os.path.isfile(dest) and sha256(dest) == digest:
+        # A prior attempt may have published the bytes before its ledger write failed.
+        copy = dest
+        if not dry_run:
+            ledger.record(digest, dest, key, layer, "filed")
     if copy and os.path.realpath(copy) == os.path.realpath(path):
         return {"status": "already_filed", "path": copy}
     if copy:
         result = {"status": "duplicate", "existing": copy, "deleted": False}
-        if delete_duplicate and in_inbox:
-            result["deleted"] = not dry_run
-            if not dry_run:
-                os.remove(path)
+        if delete_duplicate and in_inbox and not dry_run:
+            if sha256(path) != digest:
+                return {"error": "the inbox file changed while checking the duplicate; retry with the current file"}
+            os.remove(path)
+            result["deleted"] = True
         return {"dry_run": dry_run, **result}
-    if os.path.exists(dest):
-        return {"error": f"{dest} already exists and is a different document; pass another name"}
+    collision = {"error": f"{dest} already exists; pass another name"}
+    if os.path.lexists(dest):
+        return collision
     if dry_run:
         return {"dry_run": True, "status": "would_move", "to": dest}
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    shutil.move(path, dest)
-    ledger.record(digest, dest, doc.key if doc else "", "document" if doc else "csv", "filed")
+    try:
+        _publish_copy(path, dest, digest)
+    except FileExistsError:
+        return collision
+    ledger.record(digest, dest, key, layer, "filed")
+    if sha256(path) != digest:
+        return {"error": "the source changed after its original contents were filed", "to": dest}
+    os.remove(path)
     return {"status": "moved", "to": dest}
