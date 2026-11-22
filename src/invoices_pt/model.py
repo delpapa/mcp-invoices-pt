@@ -53,3 +53,8 @@ class Document:
         if not self.text:
             d.pop("text")
         return d
+
+    @property
+    def cancelled(self) -> bool:
+        status = str(self.extra.get("status", "")).strip().casefold()
+        return (self.layer == "qr" and status == "a") or status in {"anulado", "anulada"}
