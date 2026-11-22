@@ -309,3 +309,19 @@ def test_save_upgrades_old_summary_ranges_and_preserves_custom_formulas(cfg, mon
     assert "$1048576" in saved["Expenses"].cell(boxes[4], quarters["Q2"]).value
     assert saved["Expenses"].cell(boxes[96], quarters["Q1"]).value == 123
     assert saved["Expenses"]["M1"].value == "=SUM($J$34:$J$5000)"
+
+
+def test_manual_quarter_amounts_survive_declaration_and_filing(cfg):
+    create_year(cfg, 2026, 10)
+    exp, _ = open_books(cfg, 2026)
+    wb = exp.book.load()
+    ws = wb["Expenses"]
+    rows, quarters = exp._block(ws)
+    ws.cell(rows[24], quarters["Q1"]).value = 75
+    ws.cell(rows[94], quarters["Q1"]).value = 80
+    exp.book.save(wb)
+    q1 = boxes(exp, "Q1")
+    assert (q1[24], q1[91], q1[94], q1[96]) == (75, 85, 80, 80)
+    assert boxes(exp, "Q2")[61] == 80
+    assert exp.freeze("Q1", dry_run=False)["frozen"]
+    assert boxes(exp, "Q1") == q1 and boxes(exp, "Q2")[61] == 80

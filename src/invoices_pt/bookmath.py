@@ -143,16 +143,20 @@ def quarter_inputs(expenses: list[dict], income: list[dict], q: str) -> dict[int
     return {b: r2(v) for b, v in boxes.items()}
 
 
-def results(boxes: dict[int, float]) -> dict[int, float]:
-    out = {box: sum(boxes.get(b, 0.0) for b in fields) for box, fields in RESULT_SUMS.items()}
-    out[93] = max(out[92] - out[91], 0.0)
-    out[94] = max(out[91] - out[92], 0.0)
-    out[96] = out[94]
+def results(boxes: dict[int, float], fixed: dict[int, float] | None = None) -> dict[int, float]:
+    # A number entered directly into a result cell replaces its formula and
+    # becomes the input to the remaining live result cells.
+    fixed = fixed or {}
+    out = {box: fixed.get(box, sum(boxes.get(b, 0.0) for b in fields)) for box, fields in RESULT_SUMS.items()}
+    out[93] = fixed.get(93, max(out[92] - out[91], 0.0))
+    out[94] = fixed.get(94, max(out[91] - out[92], 0.0))
+    out[96] = fixed.get(96, out[94])
     return {k: r2(v) for k, v in out.items()}
 
 
 def declaration(expenses: list[dict], income: list[dict], opening_credit: float,
-                frozen: dict[str, dict[int, float]] | None = None) -> dict[str, dict[int, float]]:
+                frozen: dict[str, dict[int, float]] | None = None,
+                overrides: dict[str, dict[int, float]] | None = None) -> dict[str, dict[int, float]]:
     """All four quarters. Quarters in `frozen` (filed) keep their stored values; box 61 chains from box 96."""
     frozen = frozen or {}
     out, carried = {}, opening_credit
@@ -162,7 +166,9 @@ def declaration(expenses: list[dict], income: list[dict], opening_credit: float,
         else:
             boxes = quarter_inputs(expenses, income, q)
             boxes[61] = r2(carried)
-            boxes.update(results(boxes))
+            manual = (overrides or {}).get(q, {})
+            boxes.update(manual)
+            boxes.update(results(boxes, manual))
         out[q] = boxes
         carried = boxes.get(96, 0.0)
     return out

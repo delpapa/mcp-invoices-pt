@@ -313,8 +313,12 @@ class XlsxExpenses(XlsxTable):
         for q in filed:
             if 96 not in boxes or bookmath.num(ws.cell(boxes[96], quarters[q]).value) is None:
                 raise ValueError(f"missing or invalid {q} box 96 in the books for {self.book.year}")
-        opening = bookmath.num(ws.cell(boxes[61], quarters["Q1"]).value) or 0.0
-        all_q = bookmath.declaration(self._records(wb), self.book.income._records(wb), opening, frozen)
+        manual = {}
+        for q, col in quarters.items():
+            if q not in filed:
+                manual[q] = {box: value for box, r in boxes.items()
+                             if (value := bookmath.num(ws.cell(r, col).value)) is not None}
+        all_q = bookmath.declaration(self._records(wb), self.book.income._records(wb), 0, frozen, manual)
         return all_q, filed
 
     def declaration(self, q: str) -> dict:
