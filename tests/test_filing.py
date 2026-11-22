@@ -184,3 +184,15 @@ def test_identical_unindexed_archive_is_recorded_only_on_commit(qr_png, cfg, tmp
     result = file_document(cfg, ledger, src, dry_run=False)
     assert result["existing"] == dest and result["deleted"]
     assert ledger.get(digest)["path"] == dest and sha256(dest) == digest
+
+
+@pytest.mark.parametrize("update", [("*E:N*", "*E:A*"), ("*O:123.00*", "*O:125.00*"),
+                                     ("ABCD1234-42", "OTHER123-42")])
+def test_revised_document_is_preserved_with_original(qr_png, cfg, tmp_path, update):
+    _, ledger = _setup(cfg)
+    folder = tmp_path / "inbox"
+    first = file_document(cfg, ledger, qr_png(folder=folder), dry_run=False)["to"]
+    revised = qr_png(AT_PAYLOAD.replace(*update), folder=folder, name="revision.png")
+    result = file_document(cfg, ledger, revised, name="revised.png", dry_run=False)
+    assert result["status"] == "moved"
+    assert os.path.isfile(first) and sha256(first) != sha256(result["to"])

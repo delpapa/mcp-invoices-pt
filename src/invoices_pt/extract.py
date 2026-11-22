@@ -27,17 +27,20 @@ def read_document(path: str) -> Document:
 
 
 def matching_documents(doc: Document, ledger: Ledger) -> list[dict]:
-    """Look up a document by identity, verifying ambiguous entries from older ledgers."""
+    """Confirm the contents behind a matching number, including entries from older ledgers."""
     if not doc.key:
         return []
-    matches = ledger.by_key(doc.key)
-    for row in ledger.by_key(doc.legacy_key):
+    matches = []
+    candidates = ledger.by_key(doc.key) + ledger.by_key(doc.legacy_key)
+    for row in candidates:
         try:
             previous = read_document(row["path"])
         except Exception:
-            # A missing or unreadable original cannot establish a duplicate.
             continue
-        if previous.key == doc.key:
+        if (previous.key == doc.key and previous.date == doc.date and previous.currency == doc.currency
+                and previous.amount == doc.amount and previous.vat_included == doc.vat_included
+                and previous.atcud == doc.atcud and previous.buyer_nif == doc.buyer_nif
+                and previous.cancelled == doc.cancelled):
             matches.append(row)
     return matches
 
